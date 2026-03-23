@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Antigravity SIEM Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="layout">
+        <header>
+            <h1>🛡️ Antigravity SIEM Dashboard</h1>
+            <div class="status-indicator">
+                <span id="ws-status" class="offline">Disconnected</span>
+            </div>
+        </header>
+        
+        <div class="controls">
+            <button id="btn-suricata" class="btn primary" onclick="toggleSuricata()">🚀 Start Suricata (F1)</button>
+            <button id="btn-yara" class="btn secondary" onclick="toggleYara()">🦠 Start Yara (F2)</button>
+            <button id="btn-logs" class="btn accent" onclick="openLogViewer()">📊 View Logs (F3)</button>
+        </div>
+
+        <div class="consoles">
+            <div class="console-box">
+                <h2>📡 Suricata Network Stream</h2>
+                <div id="suricata-logs" class="log-area suricata"></div>
+            </div>
+            <div class="console-box">
+                <h2>🔍 Yara File/Pattern Stream</h2>
+                <div id="yara-logs" class="log-area yara"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Logs -->
+    <div id="log-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeLogViewer()">&times;</span>
+            <h2>📅 Historical Detections</h2>
+            <select id="log-date-select" onchange="fetchLogContent()">
+                <option value="">Loading...</option>
+            </select>
+            <div id="historical-logs" class="log-area history"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

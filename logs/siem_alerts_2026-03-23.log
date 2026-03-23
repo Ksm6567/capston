@@ -1,0 +1,10 @@
+[20:52:45] [💀 Yara DETECT!] File: .\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[20:52:45] [💀 Yara DETECT!] File: .\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing
+[20:53:08] [💀 Yara DETECT!] File: .\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[20:53:08] [💀 Yara DETECT!] File: .\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing
+[20:58:55] [💀 Yara DETECT!] File: .\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[20:58:55] [💀 Yara DETECT!] File: .\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing
+[20:59:24] [💀 Yara DETECT!] File: .\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[20:59:24] [💀 Yara DETECT!] File: .\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing
+[21:21:51] [💀 Yara DETECT!] File: .\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[21:21:51] [💀 Yara DETECT!] File: .\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing
