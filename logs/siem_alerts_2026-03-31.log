@@ -1,0 +1,2 @@
+[19:04:09] [💀 Yara DETECT!] File: c:\Users\ybi65\OneDrive\Desktop\capstone\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[19:04:09] [💀 Yara DETECT!] File: c:\Users\ybi65\OneDrive\Desktop\capstone\backend\rules\sample.yar | Rules Matched: Generic_Ransomware_Note, Suspicious_PowerShell_Download, Crypto_Miner_Signatures, Mock_Hacker_Testing

@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +14,16 @@ PROJECT_ROOT = os.path.dirname(BASE_DIR)
 sys.path.append(os.path.join(BASE_DIR, 'src'))
 from suricata_monitor import SuricataMonitor
 from yara_scanner import YaraScanner
+from database import init_db, save_log, SessionLocal, SiemLog
 
-app = FastAPI(title="SIEM API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global loop
+    loop = asyncio.get_running_loop()
+    init_db()
+    yield
+
+app = FastAPI(title="SIEM API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,11 +38,6 @@ suricata_thread = None
 yara_thread = None
 connected_websockets = []
 loop = None
-
-@app.on_event("startup")
-async def startup_event():
-    global loop
-    loop = asyncio.get_running_loop()
 
 def write_to_file_log(message: str):
     exclude_keywords = ["Waiting for", "System Initialized", "Starting", "Stopping", "stopped", "Monitoring", "Compiling", "Engine Ready"]
@@ -51,6 +55,7 @@ def write_to_file_log(message: str):
 
 def broadcast_log(source: str, message: str):
     write_to_file_log(message)
+    save_log(source, message)  # MySQL에 저장
     payload = {"source": source, "message": message, "timestamp": datetime.now().strftime("%H:%M:%S")}
     
     if loop and loop.is_running():

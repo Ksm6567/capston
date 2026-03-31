@@ -2,3 +2,5 @@ yara-python==4.5.1
 fastapi
 uvicorn
 websockets
+sqlalchemy
+pymysql
