@@ -1,0 +1,10 @@
+[21:50:55] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\ps_test.txt | Rules Matched: Suspicious_PowerShell_Loader
+[21:50:55] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[21:50:55] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\backend\test_malware.txt | Rules Matched: Mock_Hacker_Testing
+[21:50:56] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\backend\src\test_ws_pipeline.py | Rules Matched: Mock_Hacker_Testing
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\ps_test.txt | Rules Matched: Suspicious_PowerShell_Loader
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\backend\test_malware.txt | Rules Matched: Mock_Hacker_Testing
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\backend\src\test_ws_pipeline.py | Rules Matched: Mock_Hacker_Testing
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\scanner_test\loader.ps1 | Rules Matched: Suspicious_PowerShell_Loader
+[22:04:45] [Yara DETECT] File: c:\Users\ybi65\OneDrive\Desktop\capstone\scanner_test\note.txt | Rules Matched: Generic_Ransomware_Note

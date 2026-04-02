@@ -1,0 +1,5 @@
+CALLBACK: Compiling Yara rules from: C:\Users\ybi65\OneDrive\Desktop\capstone\backend\rules\enhanced_rules.yar
+CALLBACK: Starting continuous Yara scan on directory: C:\Users\ybi65\OneDrive\Desktop\capstone
+CALLBACK: [Yara DETECT] File: C:\Users\ybi65\OneDrive\Desktop\capstone\test_malware.txt | Rules Matched: Generic_Ransomware_Note, Mock_Hacker_Testing
+CALLBACK: [Yara DETECT] File: C:\Users\ybi65\OneDrive\Desktop\capstone\backend\test_malware.txt | Rules Matched: Mock_Hacker_Testing
+CALLBACK: [Yara DETECT] File: C:\Users\ybi65\OneDrive\Desktop\capstone\backend\src\test_ws_pipeline.py | Rules Matched: Mock_Hacker_Testing

