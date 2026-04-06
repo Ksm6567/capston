@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 from threading import Thread
 
@@ -22,11 +22,12 @@ class YaraScanner(Thread):
     MAX_FILE_SIZE = 50 * 1024 * 1024
     POLL_INTERVAL = 10
 
-    def __init__(self, rules_path="rules/enhanced_rules.yar", target_path=None, callback=None, on_finished=None):
+    def __init__(self, rules_path="rules/enhanced_rules.yar", target_path=None, target_paths=None, callback=None, on_finished=None):
         super().__init__()
         self.daemon = True
         self.rules_path = rules_path
         self.target_path = target_path
+        self.target_paths = target_paths or []
         self._is_running = False
         self.callback = callback
         self.on_finished = on_finished
@@ -37,6 +38,9 @@ class YaraScanner(Thread):
             self.callback(message)
 
     def get_scan_roots(self):
+        if self.target_paths:
+            return [path for path in self.target_paths if path]
+
         if self.target_path:
             return [self.target_path]
 
@@ -143,9 +147,10 @@ class YaraScanner(Thread):
 
         roots = self.get_scan_roots()
         root_summary = ", ".join(roots)
-        self.emit(f"Starting initial full-drive Yara scan on: {root_summary}")
+        self.emit(f"Starting initial Yara scan on: {root_summary}")
         scanned, matched = self.scan_files(rules, roots, only_changed=False)
         self.emit(f"Initial Yara scan complete. Scanned {scanned} files, matched {matched} files.")
+        self.emit("Initial Yara scan finished. Continuing to monitor selected folders for file changes.")
 
         while self._is_running:
             scanned, matched = self.scan_files(rules, roots, only_changed=True)

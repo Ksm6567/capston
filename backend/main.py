@@ -1,8 +1,9 @@
-﻿import os
+import os
 import sys
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -36,6 +37,65 @@ suricata_thread = None
 yara_thread = None
 connected_websockets = []
 loop = None
+
+
+SKIPPED_DIR_NAMES = {
+    "$recycle.bin",
+    "system volume information",
+}
+
+
+def build_directory_entry(path_str: str, parent_path: str | None = None):
+    normalized = os.path.normpath(path_str)
+    drive = os.path.splitdrive(normalized)[0] + "\\"
+
+    if normalized == drive:
+        label = normalized
+        depth = 0
+    else:
+        relative_path = os.path.relpath(normalized, drive)
+        depth = relative_path.count(os.sep) + 1
+        label = os.path.basename(normalized) or relative_path
+
+    return {
+        "label": label,
+        "path": normalized,
+        "depth": depth,
+        "drive": drive,
+        "parent_path": parent_path,
+    }
+
+
+def get_root_scan_directories():
+    entries = []
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        drive = f"{letter}:\\"
+        if os.path.exists(drive):
+            entries.append(build_directory_entry(drive))
+    return entries
+
+
+def get_child_scan_directories(parent_path: str):
+    normalized_parent = os.path.normpath(parent_path)
+    children = []
+
+    if not os.path.isdir(normalized_parent):
+        return children
+
+    try:
+        for child in sorted(Path(normalized_parent).iterdir(), key=lambda item: item.name.lower()):
+            if not child.is_dir():
+                continue
+
+            lowered_name = child.name.lower()
+            if lowered_name in SKIPPED_DIR_NAMES:
+                continue
+
+            children.append(build_directory_entry(str(child), normalized_parent))
+    except OSError:
+        return []
+
+    return children
 
 
 def write_to_file_log(message: str):
@@ -125,15 +185,25 @@ def on_yara_finished():
 
 
 @app.post("/api/yara/start")
-def start_yara():
+def start_yara(payload: dict | None = None):
     global yara_thread
     if yara_thread and yara_thread.is_alive():
         return {"status": "already running"}
 
-    broadcast_log("yara", "Starting initial full-drive Yara scan...")
+    selected_paths = []
+    if payload and isinstance(payload.get("target_paths"), list):
+        selected_paths = [
+            os.path.normpath(path)
+            for path in payload["target_paths"]
+            if isinstance(path, str) and path.strip()
+        ]
+
+    scan_scope = ", ".join(selected_paths) if selected_paths else "all detected drives"
+    broadcast_log("yara", f"Preparing Yara scan for: {scan_scope}")
     yara_thread = YaraScanner(
         rules_path=os.path.join(BASE_DIR, "rules", "enhanced_rules.yar"),
         target_path=None,
+        target_paths=selected_paths,
         callback=lambda msg: broadcast_log("yara", msg),
         on_finished=on_yara_finished,
     )
@@ -150,6 +220,16 @@ def stop_yara():
         yara_thread = None
         return {"status": "stopped"}
     return {"status": "not running"}
+
+
+@app.get("/api/yara/directories")
+def list_yara_directories():
+    return {"directories": get_root_scan_directories()}
+
+
+@app.get("/api/yara/directories/children")
+def list_yara_directory_children(path: str):
+    return {"directories": get_child_scan_directories(path)}
 
 
 @app.get("/api/logs")

@@ -110,6 +110,10 @@ header h1 {
     color: white;
 }
 
+.btn.ghost {
+    background-color: transparent;
+}
+
 .consoles {
     display: flex;
     gap: 30px;
@@ -174,6 +178,10 @@ header h1 {
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
 }
 
+.modal-content-wide {
+    max-width: 980px;
+}
+
 .close {
     color: var(--text-muted);
     float: right;
@@ -200,4 +208,139 @@ header h1 {
 .log-area.history {
     color: #e6edf3;
     white-space: pre-wrap;
+}
+
+.modal-copy {
+    margin: 0 0 16px 0;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.directory-status {
+    margin-bottom: 14px;
+    color: var(--accent);
+    font-size: 14px;
+}
+
+.directory-list {
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding-right: 8px;
+}
+
+.directory-tree-node {
+    display: block;
+}
+
+.directory-children {
+    display: none;
+    margin-top: 8px;
+}
+
+.directory-tree-node.expanded > .directory-children {
+    display: block;
+}
+
+.directory-option {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 14px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: #0d1117;
+    cursor: pointer;
+}
+
+.directory-option:hover {
+    border-color: var(--accent);
+}
+
+.directory-option-drive {
+    border-color: rgba(88, 166, 255, 0.45);
+    background: rgba(88, 166, 255, 0.08);
+}
+
+.directory-option input {
+    margin-top: 4px;
+    flex: 0 0 auto;
+}
+
+.tree-toggle {
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: #161b22;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tree-toggle:hover {
+    border-color: var(--accent);
+}
+
+.directory-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.directory-meta strong {
+    color: #e6edf3;
+}
+
+.directory-meta span {
+    color: var(--text-muted);
+    word-break: break-all;
+    font-size: 14px;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+.selected-summary {
+    margin-bottom: 14px;
+    color: #e6edf3;
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-all;
+}
+
+.directory-loading {
+    margin: 6px 0 10px 48px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 960px) {
+    .controls {
+        flex-direction: column;
+    }
+
+    .consoles {
+        flex-direction: column;
+        height: auto;
+    }
+
+    .console-box {
+        min-height: 320px;
+    }
+
+    .modal-content,
+    .modal-content-wide {
+        width: calc(100% - 32px);
+        height: auto;
+        max-height: 85vh;
+        margin: 24px auto;
+    }
 }
