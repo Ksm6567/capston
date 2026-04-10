@@ -165,3 +165,37 @@ class YaraScanner(Thread):
 
     def stop(self):
         self._is_running = False
+
+
+def scan_file_with_rules(rules_path, file_path):
+    normalized_path = os.path.normpath(file_path)
+
+    if not os.path.exists(rules_path):
+        return {
+            "status": "error",
+            "message": f"Yara rule file not found: {os.path.abspath(rules_path)}",
+            "matches": [],
+        }
+
+    if not os.path.isfile(normalized_path):
+        return {
+            "status": "missing",
+            "message": f"Target file not found for verification: {normalized_path}",
+            "matches": [],
+        }
+
+    try:
+        rules = yara.compile(filepath=rules_path)
+        matches = rules.match(normalized_path)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Yara verification failed for {normalized_path}: {exc}",
+            "matches": [],
+        }
+
+    return {
+        "status": "matched" if matches else "clean",
+        "message": f"Yara verification completed for {normalized_path}",
+        "matches": [match.rule for match in matches],
+    }

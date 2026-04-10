@@ -1,11 +1,20 @@
-﻿from datetime import datetime
+from datetime import datetime
 from pathlib import Path
+import sys
 
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent.parent
+if str(BASE_DIR.parent) not in sys.path:
+    sys.path.append(str(BASE_DIR.parent))
+
+try:
+    from backend.runtime_paths import app_root
+except ModuleNotFoundError:
+    from runtime_paths import app_root
+
+PROJECT_ROOT = app_root()
 DB_PATH = PROJECT_ROOT / 'siem_db.sqlite'
 FALLBACK_LOG = PROJECT_ROOT / 'logs' / 'siem_db_fallback.log'
 DATABASE_URL = f"sqlite:///{DB_PATH.as_posix()}"

@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 .vscode/
 .idea/
-    
+*.log
+*.sqlite-journal
+*_out.txt
+test_output.txt
