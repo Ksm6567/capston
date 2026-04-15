@@ -1,0 +1,7 @@
+fastapi==0.135.2
+uvicorn==0.42.0
+websockets==16.0
+sqlalchemy==2.0.48
+pymysql==1.1.2
+yara-python==4.5.1
+pywebview==6.1

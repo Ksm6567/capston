@@ -37,6 +37,105 @@ select {
     font: inherit;
 }
 
+.auth-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 32px;
+}
+
+.auth-panel {
+    width: min(960px, 100%);
+    display: grid;
+    grid-template-columns: minmax(280px, 1.1fr) minmax(320px, 0.9fr);
+    gap: 24px;
+}
+
+.auth-copy,
+.auth-card {
+    background: linear-gradient(180deg, rgba(17, 25, 36, 0.96), rgba(9, 14, 21, 0.98));
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow);
+}
+
+.auth-copy {
+    padding: 40px;
+}
+
+.auth-copy h1 {
+    margin: 10px 0 16px;
+    font-size: 72px;
+    line-height: 0.95;
+    letter-spacing: -0.06em;
+}
+
+.auth-copy p:last-child {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.8;
+}
+
+.auth-card {
+    padding: 32px;
+    display: grid;
+    gap: 12px;
+    align-content: start;
+}
+
+.auth-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.auth-tab.active {
+    border-color: #4e88c3;
+    background: linear-gradient(180deg, rgba(26, 58, 92, 0.95), rgba(13, 33, 52, 0.98));
+}
+
+.auth-feedback {
+    padding: 12px 14px;
+    border: 1px solid rgba(110, 183, 255, 0.25);
+    background: rgba(110, 183, 255, 0.08);
+    color: #9bcfff;
+    line-height: 1.5;
+    margin-bottom: 6px;
+}
+
+.auth-feedback.error {
+    border-color: rgba(255, 123, 114, 0.3);
+    background: rgba(255, 123, 114, 0.12);
+    color: #ffb1ab;
+}
+
+.auth-feedback.success {
+    border-color: rgba(101, 193, 140, 0.35);
+    background: rgba(101, 193, 140, 0.12);
+    color: #9fe0b8;
+}
+
+.auth-label {
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.auth-input {
+    width: 100%;
+    padding: 14px 16px;
+    background: #0b1016;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.auth-submit {
+    margin-top: 8px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, rgba(79, 135, 194, 0.24), rgba(79, 135, 194, 0.16));
+    border-color: rgba(79, 135, 194, 0.4);
+}
+
 .app-shell {
     min-height: 100vh;
     padding: 32px;
@@ -137,6 +236,12 @@ select {
     box-shadow: inset 0 0 0 1px rgba(255, 118, 118, 0.15);
 }
 
+.btn.active-response {
+    border-color: #8b6a20;
+    background: linear-gradient(180deg, rgba(77, 59, 19, 0.95), rgba(44, 33, 10, 0.98));
+    box-shadow: inset 0 0 0 1px rgba(244, 201, 107, 0.15);
+}
+
 .btn.accent {
     border-color: #4b5d72;
 }
@@ -167,6 +272,32 @@ select {
     justify-content: space-between;
     gap: 20px;
     align-items: flex-start;
+}
+
+.topbar-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-left: auto;
+}
+
+.user-chip {
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    background: #0b1016;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.logout-btn {
+    padding: 10px 14px;
+}
+
+.app-hidden {
+    display: none !important;
 }
 
 .topbar h2 {
@@ -224,6 +355,13 @@ select {
     color: var(--text-muted);
     line-height: 1.7;
     font-size: 15px;
+}
+
+.hero-card.response-focus {
+    grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+    min-height: 420px;
+    border-color: rgba(244, 201, 107, 0.3);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(244, 201, 107, 0.08);
 }
 
 .response-stream {
@@ -371,6 +509,10 @@ select {
     gap: 22px;
 }
 
+.console-grid.console-grid-hidden {
+    display: none;
+}
+
 .console-box {
     padding: 22px;
     display: grid;
@@ -452,13 +594,26 @@ select {
     color: var(--text-primary);
 }
 
+.history-panel-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
 .history-panel select {
     padding: 12px;
     background: #0b1016;
     color: var(--text-primary);
     border: 1px solid var(--border-color);
-    margin-bottom: 20px;
     cursor: pointer;
+    min-width: 0;
+}
+
+.history-delete-btn {
+    padding: 12px 14px;
+    white-space: nowrap;
 }
 
 .log-area.history {
@@ -520,6 +675,47 @@ select {
     margin: 0 0 16px 0;
     color: var(--text-muted);
     line-height: 1.6;
+}
+
+.history-toolbar {
+    display: flex;
+    align-items: end;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.history-user-filter {
+    margin-right: auto;
+    display: grid;
+    gap: 8px;
+    min-width: 220px;
+}
+
+.history-user-filter label {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.history-user-filter select {
+    padding: 12px;
+    background: #0b1016;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+}
+
+.history-user-filter-hidden {
+    display: none;
+}
+
+.btn.toggle-armed {
+    border-color: rgba(255, 123, 114, 0.45);
+    background: rgba(127, 62, 70, 0.18);
+    color: #ffb1ab;
 }
 
 .directory-status {
@@ -620,6 +816,15 @@ select {
     word-break: break-all;
 }
 
+#test-alert-preset-select {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 14px;
+    background: #0b1016;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
 .directory-loading {
     margin: 6px 0 10px 48px;
     color: var(--text-muted);
@@ -627,6 +832,10 @@ select {
 }
 
 @media (max-width: 1080px) {
+    .auth-panel {
+        grid-template-columns: 1fr;
+    }
+
     .app-shell {
         grid-template-columns: 1fr;
     }
@@ -671,8 +880,13 @@ select {
         align-items: flex-start;
     }
 
+    .topbar-actions {
+        margin-left: 0;
+    }
+
     .incident-actions,
-    .modal-actions {
+    .modal-actions,
+    .history-toolbar {
         flex-direction: column;
     }
 
@@ -686,5 +900,15 @@ select {
 
     .history-grid {
         grid-template-columns: 1fr;
+    }
+
+    .history-panel-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .history-user-filter {
+        width: 100%;
+        min-width: 0;
+        margin-right: 0;
     }
 }

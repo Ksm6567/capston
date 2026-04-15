@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ from threading import Lock, Thread
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -22,12 +23,42 @@ if str(PROJECT_PACKAGE_ROOT) not in sys.path:
 
 try:
     from backend.runtime_paths import app_root, bundle_root
-    from backend.src.database import SessionLocal, SiemLog, init_db, save_log
+    from backend.src.database import (
+        authenticate_user,
+        create_session,
+        create_user,
+        delete_logs_for_user_on_date,
+        delete_logs_for_user,
+        delete_session,
+        get_db_log_content,
+        get_log_dates_for_user,
+        get_session,
+        is_db_enabled,
+        is_admin_username,
+        init_db,
+        list_usernames,
+        save_log,
+    )
     from backend.src.wazuh_monitor import WazuhMonitor
     from backend.src.yara_scanner import YaraScanner, scan_file_with_rules
 except ModuleNotFoundError:
     from runtime_paths import app_root, bundle_root
-    from src.database import SessionLocal, SiemLog, init_db, save_log
+    from src.database import (
+        authenticate_user,
+        create_session,
+        create_user,
+        delete_logs_for_user_on_date,
+        delete_logs_for_user,
+        delete_session,
+        get_db_log_content,
+        get_log_dates_for_user,
+        get_session,
+        is_db_enabled,
+        is_admin_username,
+        init_db,
+        list_usernames,
+        save_log,
+    )
     from src.wazuh_monitor import WazuhMonitor
     from src.yara_scanner import YaraScanner, scan_file_with_rules
 
@@ -65,6 +96,66 @@ LOG_SOURCES = {"wazuh", "yara", "response"}
 INCIDENTS = []
 INCIDENTS_LOCK = Lock()
 MAX_INCIDENTS = 100
+TEST_ALERT_PRESETS = {
+    "powershell_persistence": {
+        "label": "PowerShell Persistence",
+        "description": "Creates a harmless PowerShell-style persistence artifact and runs a safe marker script inside the project test folder.",
+        "filename": "safe_persistence_probe.ps1",
+        "content": (
+            "# Safe SIEM persistence simulation\n"
+            "$encoded = 'VEVTVA=='\n"
+            "$webClient = 'Net.WebClient'\n"
+            "Write-Output 'Safe persistence probe only.'\n"
+        ),
+        "rule_description": "Suspicious PowerShell persistence behavior",
+        "groups": ["sysmon", "malware", "persistence"],
+        "level": 10,
+        "execute_runtime_test": True,
+    },
+    "macro_dropper": {
+        "label": "Office Macro Dropper",
+        "description": "Creates a harmless fake macro-enabled document artifact for triage and alert testing. No code is executed.",
+        "filename": "invoice_macro_dropper.docm",
+        "content": (
+            "Safe SIEM test artifact.\n"
+            "This is not a real Office macro document.\n"
+            "It exists only to simulate a suspicious .docm file path.\n"
+        ),
+        "rule_description": "Suspicious Office macro dropper pattern",
+        "groups": ["office", "malware", "execution"],
+        "level": 8,
+        "execute_runtime_test": False,
+    },
+    "startup_link": {
+        "label": "Startup Shortcut",
+        "description": "Creates a harmless shortcut-like artifact in the test folder to simulate persistence through startup entries. No code is executed.",
+        "filename": "startup_update.lnk",
+        "content": (
+            "Safe SIEM test artifact.\n"
+            "This is not a real Windows shortcut.\n"
+            "It only simulates a suspicious startup path for the dashboard.\n"
+        ),
+        "rule_description": "Suspicious startup shortcut persistence",
+        "groups": ["windows", "persistence", "startup"],
+        "level": 7,
+        "execute_runtime_test": False,
+    },
+    "script_dropper": {
+        "label": "Script Dropper",
+        "description": "Creates a harmless JavaScript-like artifact that imitates a downloader script. No code is executed.",
+        "filename": "browser_update_dropper.js",
+        "content": (
+            "// Safe SIEM test artifact\n"
+            "// No network activity, no execution, no payload.\n"
+            "const pretendDownload = 'DownloadString';\n"
+            "console.log('Safe script dropper simulation');\n"
+        ),
+        "rule_description": "Suspicious script downloader behavior",
+        "groups": ["malware", "downloader", "script"],
+        "level": 9,
+        "execute_runtime_test": False,
+    },
+}
 SUSPICIOUS_FILE_EXTENSIONS = {
     ".exe", ".dll", ".sys", ".scr", ".msi", ".bat", ".cmd", ".ps1", ".vbs",
     ".js", ".jse", ".hta", ".jar", ".lnk", ".docm", ".xlsm", ".pptm",
@@ -73,11 +164,30 @@ HIGH_RISK_GROUP_KEYWORDS = {
     "malware", "ransomware", "trojan", "persistence", "rootkit", "powershell",
     "sysmon", "defender", "evasion",
 }
-
 SKIPPED_DIR_NAMES = {
     "$recycle.bin",
     "system volume information",
 }
+
+
+def require_auth(x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+    if not is_db_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is unavailable.")
+    if not x_session_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required.")
+    session = get_session(x_session_token)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid.")
+    return session
+
+
+def resolve_log_username(current_user: dict, requested_username: str | None) -> str:
+    username = current_user["username"]
+    if not requested_username or requested_username == username:
+        return username
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return requested_username
 
 
 def build_directory_entry(path_str: str, parent_path: str | None = None):
@@ -138,8 +248,27 @@ def sanitize_log_source(source: str):
     return normalized if normalized in LOG_SOURCES else None
 
 
-def build_log_file_path(source: str, date_str: str):
-    return os.path.join(PROJECT_ROOT, "logs", f"{source}_alerts_{date_str}.log")
+def sanitize_username_for_path(username: str | None):
+    if not username:
+        return "system"
+    return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in username)
+
+
+def build_log_file_path(source: str, date_str: str, username: str | None):
+    owner_dir = os.path.join(PROJECT_ROOT, "logs", sanitize_username_for_path(username))
+    return os.path.join(owner_dir, f"{source}_alerts_{date_str}.log")
+
+
+def build_user_log_dir(username: str):
+    return os.path.join(PROJECT_ROOT, "logs", sanitize_username_for_path(username))
+
+
+def is_valid_log_date(date_str: str):
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 
 def should_persist_log(source: str, message: str):
@@ -159,8 +288,8 @@ def should_persist_log(source: str, message: str):
     return False
 
 
-def list_log_dates_by_source():
-    log_dir = os.path.join(PROJECT_ROOT, "logs")
+def list_file_log_dates_by_source(username: str):
+    log_dir = os.path.join(PROJECT_ROOT, "logs", sanitize_username_for_path(username))
     result = {source: [] for source in sorted(LOG_SOURCES)}
 
     if not os.path.exists(log_dir):
@@ -179,54 +308,20 @@ def list_log_dates_by_source():
     return result
 
 
-def merge_log_dates():
-    combined = list_log_dates_by_source()
-    db = SessionLocal()
-    try:
-        rows = db.query(SiemLog.source, SiemLog.message, SiemLog.timestamp).all()
-        for source, message, timestamp in rows:
-            normalized_source = sanitize_log_source(source)
-            if not normalized_source or not timestamp:
-                continue
-            if not should_persist_log(normalized_source, message):
-                continue
-
-            date_str = timestamp.strftime("%Y-%m-%d")
-            if date_str not in combined[normalized_source]:
-                combined[normalized_source].append(date_str)
-    finally:
-        db.close()
+def merge_log_dates(username: str):
+    combined = list_file_log_dates_by_source(username)
+    db_dates = get_log_dates_for_user(LOG_SOURCES, username)
 
     for source in combined:
+        for date_str in db_dates.get(source, []):
+            if date_str not in combined[source]:
+                combined[source].append(date_str)
         combined[source].sort(reverse=True)
 
     return combined
 
 
-def get_db_log_content(source: str, date: str):
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(SiemLog)
-            .filter(SiemLog.source == source)
-            .order_by(SiemLog.timestamp.asc())
-            .all()
-        )
-    finally:
-        db.close()
-
-    matching_lines = []
-    for row in rows:
-        if not row.timestamp or row.timestamp.strftime("%Y-%m-%d") != date:
-            continue
-        if not should_persist_log(source, row.message):
-            continue
-        matching_lines.append(f"[{row.timestamp.strftime('%H:%M:%S')}] {row.message}")
-
-    return "\n".join(matching_lines)
-
-
-def write_to_file_log(source: str, message: str):
+def write_to_file_log(source: str, message: str, username: str | None):
     normalized_source = sanitize_log_source(source)
     if not normalized_source or not should_persist_log(normalized_source, message):
         return
@@ -235,27 +330,32 @@ def write_to_file_log(source: str, message: str):
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M:%S")
 
-    log_dir = os.path.join(PROJECT_ROOT, "logs")
+    log_dir = os.path.join(PROJECT_ROOT, "logs", sanitize_username_for_path(username))
     os.makedirs(log_dir, exist_ok=True)
-    with open(build_log_file_path(normalized_source, date_str), "a", encoding="utf-8") as file_handle:
+    with open(build_log_file_path(normalized_source, date_str, username), "a", encoding="utf-8") as file_handle:
         file_handle.write(f"[{time_str}] {message}\n")
 
 
-def broadcast_log(source: str, message: str):
-    if should_persist_log(source, message):
-        write_to_file_log(source, message)
-        save_log(source, message)
+def broadcast_log(source: str, message: str, username: str | None = None, persist: bool = True):
+    if persist and should_persist_log(source, message):
+        if username:
+            write_to_file_log(source, message, username)
+        save_log(source, message, username)
 
     payload = {
         "source": source,
         "message": message,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "username": username,
     }
 
     if loop and loop.is_running():
-        for websocket in connected_websockets.copy():
+        for client in connected_websockets.copy():
+            visible_to = client["username"]
+            if username is not None and visible_to != username:
+                continue
             try:
-                asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+                asyncio.run_coroutine_threadsafe(client["websocket"].send_json(payload), loop)
             except Exception:
                 pass
 
@@ -324,15 +424,19 @@ def store_incident(incident: dict):
         del INCIDENTS[MAX_INCIDENTS:]
 
 
-def list_incidents():
+def list_incidents(username: str):
     with INCIDENTS_LOCK:
-        return [incident.copy() for incident in INCIDENTS]
+        return [
+            incident.copy()
+            for incident in INCIDENTS
+            if incident.get("owner_username") == username
+        ]
 
 
-def get_incident(incident_id: str):
+def get_incident(incident_id: str, username: str):
     with INCIDENTS_LOCK:
         for incident in INCIDENTS:
-            if incident["id"] == incident_id:
+            if incident["id"] == incident_id and incident.get("owner_username") == username:
                 return incident
     return None
 
@@ -343,12 +447,37 @@ def append_wazuh_alert(alert: dict):
         file_handle.write(f"{json.dumps(alert, ensure_ascii=False)}\n")
 
 
+def list_test_alert_presets():
+    return [
+        {
+            "id": preset_id,
+            "label": preset["label"],
+            "description": preset["description"],
+            "execute_runtime_test": preset["execute_runtime_test"],
+        }
+        for preset_id, preset in TEST_ALERT_PRESETS.items()
+    ]
+
+
 def ensure_default_test_artifact():
     os.makedirs(DEFAULT_TEST_ARTIFACT_DIR, exist_ok=True)
     artifact_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, "update.ps1")
     if not os.path.exists(artifact_path):
         with open(artifact_path, "w", encoding="utf-8") as file_handle:
             file_handle.write("Write-Output 'Mock suspicious PowerShell persistence script'\n")
+    return artifact_path
+
+
+def create_safe_test_artifact(preset_id: str) -> str:
+    preset = TEST_ALERT_PRESETS[preset_id]
+    os.makedirs(DEFAULT_TEST_ARTIFACT_DIR, exist_ok=True)
+    artifact_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, preset["filename"])
+    content = preset["content"]
+    if preset.get("execute_runtime_test"):
+        marker_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, "safe_runtime_marker.txt")
+        content += f"Set-Content -Path '{marker_path}' -Value 'Safe runtime test completed.'\n"
+    with open(artifact_path, "w", encoding="utf-8") as file_handle:
+        file_handle.write(content)
     return artifact_path
 
 
@@ -422,17 +551,36 @@ def trigger_wazuh_runtime_test(script_path: str) -> dict:
     }
 
 
-def run_yara_verification(file_path: str):
-    broadcast_log("yara", f"[Yara VERIFY] Starting verification for: {file_path}")
+def build_test_alert_payload(preset_id: str, file_path: str, username: str) -> dict:
+    preset = TEST_ALERT_PRESETS[preset_id]
+    return {
+        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "username": username,
+        "agent": {
+            "name": "win-lab-endpoint",
+        },
+        "rule": {
+            "level": preset["level"],
+            "description": preset["rule_description"],
+            "groups": preset["groups"],
+        },
+        "syscheck": {
+            "path": file_path,
+        },
+    }
+
+
+def run_yara_verification(file_path: str, username: str | None = None):
+    broadcast_log("yara", f"[Yara VERIFY] Starting verification for: {file_path}", username)
     result = scan_file_with_rules(RULES_PATH, file_path)
 
     if result["status"] == "matched":
         match_names = ", ".join(result["matches"])
-        broadcast_log("yara", f"[Yara DETECT] Verification hit for {file_path} | Rules Matched: {match_names}")
+        broadcast_log("yara", f"[Yara DETECT] Verification hit for {file_path} | Rules Matched: {match_names}", username)
     elif result["status"] == "clean":
-        broadcast_log("yara", f"[Yara VERIFY] No Yara rules matched for: {file_path}")
+        broadcast_log("yara", f"[Yara VERIFY] No Yara rules matched for: {file_path}", username)
     else:
-        broadcast_log("yara", f"[Yara VERIFY] {result['message']}")
+        broadcast_log("yara", f"[Yara VERIFY] {result['message']}", username)
 
     return result
 
@@ -442,14 +590,15 @@ def process_wazuh_alert(event: dict):
     level = event.get("level", 0)
     file_path = event.get("file_path")
     groups = event.get("groups", [])
+    username = event.get("username")
 
-    broadcast_log("wazuh", message)
+    broadcast_log("wazuh", message, username)
 
     yara_result = None
     if file_path:
-        yara_result = run_yara_verification(file_path)
+        yara_result = run_yara_verification(file_path, username)
     else:
-        broadcast_log("yara", "[Yara VERIFY] Skipped file verification because the Wazuh event did not include a file path.")
+        broadcast_log("yara", "[Yara VERIFY] Skipped file verification because the Wazuh event did not include a file path.", username)
 
     risk_score, risk_label = calculate_risk(level, file_path, groups, yara_result)
     response_actions = recommend_response(level, file_path, yara_result)
@@ -458,7 +607,7 @@ def process_wazuh_alert(event: dict):
         f"Risk {risk_label.upper()} ({risk_score}) | Suggested decision: {decision_hint.upper()} | "
         + " ; ".join(response_actions)
     )
-    broadcast_log("response", f"[Response] {response_message}")
+    broadcast_log("response", f"[Response] {response_message}", username)
 
     incident = {
         "id": str(uuid4()),
@@ -477,6 +626,7 @@ def process_wazuh_alert(event: dict):
         "risk_label": risk_label,
         "recommended_actions": response_actions,
         "suggested_decision": decision_hint,
+        "owner_username": username,
     }
     store_incident(incident)
 
@@ -486,17 +636,64 @@ def handle_wazuh_event(event: dict):
         Thread(target=process_wazuh_alert, args=(event,), daemon=True).start()
         return
 
-    broadcast_log("wazuh", event.get("message", "Received Wazuh monitor status update."))
+    broadcast_log("wazuh", event.get("message", "Received Wazuh monitor status update."), event.get("username"))
+
+
+@app.post("/api/auth/register")
+def register_user(payload: dict):
+    username = (payload or {}).get("username", "").strip()
+    password = (payload or {}).get("password", "")
+    success, message = create_user(username, password)
+    return {"status": "created" if success else "error", "message": message}
+
+
+@app.post("/api/auth/login")
+def login(payload: dict):
+    username = (payload or {}).get("username", "").strip()
+    password = (payload or {}).get("password", "")
+    user = authenticate_user(username, password)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
+
+    token, expires_at = create_session(user.username)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create a session.")
+
+    broadcast_log("response", f"[Response] User {user.username} signed in.", user.username)
+    return {
+        "token": token,
+        "user": {"username": user.username, "is_admin": is_admin_username(user.username)},
+        "expires_at": expires_at.isoformat() if expires_at else None,
+    }
+
+
+@app.get("/api/auth/me")
+def who_am_i(current_user: dict = Depends(require_auth)):
+    return {"user": {"username": current_user["username"], "is_admin": current_user.get("is_admin", False)}}
+
+
+@app.get("/api/users")
+def get_users(current_user: dict = Depends(require_auth)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return {"users": list_usernames()}
+
+
+@app.post("/api/auth/logout")
+def logout(current_user: dict = Depends(require_auth), x_session_token: str | None = Header(default=None, alias="X-Session-Token")):
+    delete_session(x_session_token or "")
+    broadcast_log("response", f"[Response] User {current_user['username']} signed out.", current_user["username"])
+    return {"status": "signed out"}
 
 
 @app.get("/api/incidents")
-def get_incidents():
-    return {"incidents": list_incidents()}
+def get_incidents(current_user: dict = Depends(require_auth)):
+    return {"incidents": list_incidents(current_user["username"])}
 
 
 @app.post("/api/incidents/{incident_id}/decision")
-def decide_incident(incident_id: str, payload: dict):
-    incident = get_incident(incident_id)
+def decide_incident(incident_id: str, payload: dict, current_user: dict = Depends(require_auth)):
+    incident = get_incident(incident_id, current_user["username"])
     if not incident:
         return {
             "status": "not found",
@@ -518,7 +715,7 @@ def decide_incident(incident_id: str, payload: dict):
             incident["status"] = "error"
             incident["decision"] = "delete"
             incident["decision_note"] = "No file path was available for deletion."
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: no file path available.")
+            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: no file path available.", current_user["username"])
             return {
                 "status": "error",
                 "incident": incident.copy(),
@@ -530,7 +727,7 @@ def decide_incident(incident_id: str, payload: dict):
             incident["status"] = "deleted"
             incident["decision"] = "delete"
             incident["decision_note"] = "File was already missing when delete was requested."
-            broadcast_log("response", f"[Response] File already absent for incident {incident_id}: {file_path}")
+            broadcast_log("response", f"[Response] File already absent for incident {incident_id}: {file_path}", current_user["username"])
             return {
                 "status": "deleted",
                 "incident": incident.copy(),
@@ -542,7 +739,7 @@ def decide_incident(incident_id: str, payload: dict):
             incident["status"] = "error"
             incident["decision"] = "delete"
             incident["decision_note"] = "Target path is not a file."
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: target is not a file.")
+            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: target is not a file.", current_user["username"])
             return {
                 "status": "error",
                 "incident": incident.copy(),
@@ -557,7 +754,7 @@ def decide_incident(incident_id: str, payload: dict):
             incident["decision"] = "delete"
             incident["decision_note"] = f"File deleted: {file_path}" if deleted else f"Delete was attempted, but the file still exists: {file_path}"
             if deleted:
-                broadcast_log("response", f"[Response] File deleted for incident {incident_id}: {file_path}")
+                broadcast_log("response", f"[Response] File deleted for incident {incident_id}: {file_path}", current_user["username"])
                 return {
                     "status": "deleted",
                     "incident": incident.copy(),
@@ -567,7 +764,7 @@ def decide_incident(incident_id: str, payload: dict):
 
             incident["status"] = "error"
             incident["decision_note"] = f"Delete failed: file still exists after os.remove. {file_path}"
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: file still exists after removal attempt.")
+            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: file still exists after removal attempt.", current_user["username"])
             return {
                 "status": "error",
                 "incident": incident.copy(),
@@ -578,7 +775,7 @@ def decide_incident(incident_id: str, payload: dict):
             incident["status"] = "error"
             incident["decision"] = "delete"
             incident["decision_note"] = f"Delete failed: {exc}"
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: {exc}")
+            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: {exc}", current_user["username"])
             return {
                 "status": "error",
                 "incident": incident.copy(),
@@ -589,7 +786,7 @@ def decide_incident(incident_id: str, payload: dict):
     incident["status"] = "kept"
     incident["decision"] = "keep"
     incident["decision_note"] = "Analyst chose to keep the file and continue monitoring."
-    broadcast_log("response", f"[Response] Incident {incident_id} marked as kept for monitoring.")
+    broadcast_log("response", f"[Response] Incident {incident_id} marked as kept for monitoring.", current_user["username"])
     return {
         "status": "kept",
         "incident": incident.copy(),
@@ -599,8 +796,8 @@ def decide_incident(incident_id: str, payload: dict):
 
 
 @app.post("/api/incidents/{incident_id}/open-folder")
-def open_incident_folder(incident_id: str):
-    incident = get_incident(incident_id)
+def open_incident_folder(incident_id: str, current_user: dict = Depends(require_auth)):
+    incident = get_incident(incident_id, current_user["username"])
     if not incident:
         return {"status": "not found"}
 
@@ -622,29 +819,37 @@ def open_incident_folder(incident_id: str):
 
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
+    token = websocket.query_params.get("token", "")
+    session = get_session(token)
+    if not session:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
-    connected_websockets.append(websocket)
+    client = {"websocket": websocket, "username": session["username"]}
+    connected_websockets.append(client)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if websocket in connected_websockets:
-            connected_websockets.remove(websocket)
+        if client in connected_websockets:
+            connected_websockets.remove(client)
     except Exception:
-        if websocket in connected_websockets:
-            connected_websockets.remove(websocket)
+        if client in connected_websockets:
+            connected_websockets.remove(client)
 
 
 @app.get("/api/status")
-def get_status():
+def get_status(current_user: dict = Depends(require_auth)):
     return {
         "wazuh_running": wazuh_thread.is_alive() if wazuh_thread else False,
         "yara_running": yara_thread.is_alive() if yara_thread else False,
+        "username": current_user["username"],
     }
 
 
 @app.post("/api/wazuh/start")
-def start_wazuh():
+def start_wazuh(current_user: dict = Depends(require_auth)):
     global wazuh_thread
     if wazuh_thread and wazuh_thread.is_alive():
         return {"status": "already running"}
@@ -653,10 +858,13 @@ def start_wazuh():
     if not os.path.exists(DEFAULT_WAZUH_ALERT_LOG):
         Path(DEFAULT_WAZUH_ALERT_LOG).touch()
 
-    broadcast_log("wazuh", "Starting Wazuh event monitoring...")
+    broadcast_log("wazuh", "Starting Wazuh event monitoring...", current_user["username"])
     wazuh_thread = WazuhMonitor(
         log_path=DEFAULT_WAZUH_ALERT_LOG,
-        callback=handle_wazuh_event,
+        callback=lambda event: handle_wazuh_event({
+            **event,
+            "username": event.get("username") or current_user["username"],
+        }),
         replay_existing=False,
     )
     wazuh_thread.start()
@@ -664,18 +872,28 @@ def start_wazuh():
 
 
 @app.post("/api/wazuh/stop")
-def stop_wazuh():
+def stop_wazuh(current_user: dict = Depends(require_auth)):
     global wazuh_thread
     if wazuh_thread and wazuh_thread.is_alive():
-        broadcast_log("wazuh", "Stopping Wazuh event monitoring...")
+        broadcast_log("wazuh", "Stopping Wazuh event monitoring...", current_user["username"])
         wazuh_thread.stop()
         wazuh_thread = None
         return {"status": "stopped"}
     return {"status": "not running"}
 
 
+@app.get("/api/wazuh/test-alert-presets")
+def get_test_alert_presets(current_user: dict = Depends(require_auth)):
+    return {"presets": list_test_alert_presets()}
+
+
 @app.post("/api/wazuh/test-alert")
-def create_test_wazuh_alert(payload: dict | None = None):
+def create_test_wazuh_alert(payload: dict | None = None, current_user: dict = Depends(require_auth)):
+    preset_id = (payload or {}).get("preset_id", "powershell_persistence")
+    if preset_id not in TEST_ALERT_PRESETS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown test alert preset.")
+
+    preset = TEST_ALERT_PRESETS[preset_id]
     requested_path = None
     if payload and isinstance(payload.get("file_path"), str):
         requested_path = payload["file_path"].strip()
@@ -686,26 +904,24 @@ def create_test_wazuh_alert(payload: dict | None = None):
             "message": f"Requested test file does not exist: {requested_path}",
         }
 
-    test_file_path = requested_path or create_wazuh_runtime_test_script()
-    runtime_result = trigger_wazuh_runtime_test(test_file_path)
+    test_file_path = requested_path or create_safe_test_artifact(preset_id)
+    runtime_result = (
+        trigger_wazuh_runtime_test(test_file_path)
+        if preset.get("execute_runtime_test")
+        else {"status": "prepared", "message": "Safe test artifact prepared without executing any script."}
+    )
 
-    alert = {
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-        "agent": {
-            "name": "win-lab-endpoint",
-        },
-        "rule": {
-            "level": 10,
-            "description": "Suspicious PowerShell persistence behavior",
-            "groups": ["sysmon", "malware", "persistence"],
-        },
-        "syscheck": {
-            "path": test_file_path,
-        },
-    }
+    alert = build_test_alert_payload(preset_id, test_file_path, current_user["username"])
     append_wazuh_alert(alert)
+    broadcast_log(
+        "response",
+        f"[Response] Test alert queued by {current_user['username']} using preset {preset['label']}.",
+        current_user["username"],
+    )
     return {
         "status": "queued",
+        "preset_id": preset_id,
+        "preset_label": preset["label"],
         "alert": alert,
         "runtime_test": runtime_result,
     }
@@ -717,7 +933,7 @@ def on_yara_finished():
 
 
 @app.post("/api/yara/start")
-def start_yara(payload: dict | None = None):
+def start_yara(payload: dict | None = None, current_user: dict = Depends(require_auth)):
     global yara_thread
     if yara_thread and yara_thread.is_alive():
         return {"status": "already running"}
@@ -731,12 +947,12 @@ def start_yara(payload: dict | None = None):
         ]
 
     scan_scope = ", ".join(selected_paths) if selected_paths else "all detected drives"
-    broadcast_log("yara", f"[Yara VERIFY] Preparing Yara scan for: {scan_scope}")
+    broadcast_log("yara", f"[Yara VERIFY] Preparing Yara scan for: {scan_scope}", current_user["username"])
     yara_thread = YaraScanner(
         rules_path=RULES_PATH,
         target_path=None,
         target_paths=selected_paths,
-        callback=lambda msg: broadcast_log("yara", msg),
+        callback=lambda msg: broadcast_log("yara", msg, current_user["username"]),
         on_finished=on_yara_finished,
     )
     yara_thread.start()
@@ -744,10 +960,10 @@ def start_yara(payload: dict | None = None):
 
 
 @app.post("/api/yara/stop")
-def stop_yara():
+def stop_yara(current_user: dict = Depends(require_auth)):
     global yara_thread
     if yara_thread and yara_thread.is_alive():
-        broadcast_log("yara", "[Yara VERIFY] Stopping Yara host scan...")
+        broadcast_log("yara", "[Yara VERIFY] Stopping Yara host scan...", current_user["username"])
         yara_thread.stop()
         yara_thread = None
         return {"status": "stopped"}
@@ -755,36 +971,107 @@ def stop_yara():
 
 
 @app.get("/api/yara/directories")
-def list_yara_directories():
+def list_yara_directories(current_user: dict = Depends(require_auth)):
     return {"directories": get_root_scan_directories()}
 
 
 @app.get("/api/yara/directories/children")
-def list_yara_directory_children(path: str):
+def list_yara_directory_children(path: str, current_user: dict = Depends(require_auth)):
     return {"directories": get_child_scan_directories(path)}
 
 
 @app.get("/api/logs")
-def get_logs_list():
-    return {"logs": merge_log_dates()}
+def get_logs_list(username: str | None = None, current_user: dict = Depends(require_auth)):
+    target_username = resolve_log_username(current_user, username)
+    return {"logs": merge_log_dates(target_username), "username": target_username}
+
+
+@app.post("/api/logs/clear")
+def clear_logs(current_user: dict = Depends(require_auth)):
+    username = current_user["username"]
+    deleted_db_rows = delete_logs_for_user(username)
+    log_dir = build_user_log_dir(username)
+    deleted_files = 0
+
+    if os.path.isdir(log_dir):
+        for root, _, files in os.walk(log_dir):
+            deleted_files += len(files)
+        shutil.rmtree(log_dir, ignore_errors=True)
+
+    broadcast_log("response", f"[Response] Cleared stored logs for {username}.", username, persist=False)
+    return {
+        "status": "cleared",
+        "deleted_db_rows": deleted_db_rows,
+        "deleted_files": deleted_files,
+    }
+
+
+@app.post("/api/logs/{source}/{date}/clear")
+def clear_logs_for_day(source: str, date: str, current_user: dict = Depends(require_auth)):
+    normalized_source = sanitize_log_source(source)
+    if not normalized_source:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown log source.")
+    if not is_valid_log_date(date):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid log date.")
+
+    username = current_user["username"]
+    deleted_db_rows = delete_logs_for_user_on_date(username, normalized_source, date)
+
+    file_path = build_log_file_path(normalized_source, date, username)
+    deleted_files = 0
+    if os.path.isfile(file_path):
+        try:
+            os.remove(file_path)
+            deleted_files = 1
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete log file: {exc}",
+            ) from exc
+
+    broadcast_log(
+        "response",
+        f"[Response] Cleared {normalized_source} logs for {username} on {date}.",
+        username,
+        persist=False,
+    )
+    return {
+        "status": "cleared",
+        "source": normalized_source,
+        "date": date,
+        "deleted_db_rows": deleted_db_rows,
+        "deleted_files": deleted_files,
+    }
 
 
 @app.get("/api/logs/{source}/{date}")
-def get_log_content(source: str, date: str):
+def get_log_content(source: str, date: str, username: str | None = None, current_user: dict = Depends(require_auth)):
     normalized_source = sanitize_log_source(source)
     if not normalized_source:
         return {"content": "Unknown log source."}
 
-    file_path = build_log_file_path(normalized_source, date)
+    target_username = resolve_log_username(current_user, username)
+    file_path = build_log_file_path(normalized_source, date, target_username)
+    parts = []
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as file_handle:
-            return {"content": file_handle.read()}
+            parts.append(file_handle.read().strip())
 
-    db_content = get_db_log_content(normalized_source, date)
+    db_content = get_db_log_content(normalized_source, date, target_username)
     if db_content:
-        return {"content": db_content}
+        parts.append(db_content.strip())
 
-    return {"content": "Log file not found."}
+    merged_lines = []
+    seen_lines = set()
+    for part in parts:
+        for line in part.splitlines():
+            normalized_line = line.strip()
+            if not normalized_line or normalized_line in seen_lines:
+                continue
+            seen_lines.add(normalized_line)
+            merged_lines.append(normalized_line)
+
+    return {"content": "\n".join(merged_lines) if merged_lines else "Log file not found.", "username": target_username}
 
 
 if FRONTEND_DIR.exists():

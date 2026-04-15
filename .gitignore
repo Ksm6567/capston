@@ -7,3 +7,4 @@ __pycache__/
 *.sqlite-journal
 *_out.txt
 test_output.txt
+installer/output/

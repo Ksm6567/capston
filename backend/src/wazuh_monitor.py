@@ -48,6 +48,7 @@ class WazuhMonitor(Thread):
             "file_path": file_path,
             "groups": groups if isinstance(groups, list) else [],
             "kind": "alert",
+            "username": alert.get("username"),
         }
 
     def emit_status(self, message):
