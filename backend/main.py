@@ -1,5 +1,6 @@
 import asyncio
-import base64
+import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -70,14 +71,16 @@ LOCAL_RULES_PATH = os.getenv(
 )
 EXTERNAL_RULES_PATH = os.getenv(
     "YARA_EXTERNAL_RULES_PATH",
-    os.getenv("YARA_RULES_PATH", str(BUNDLE_ROOT / "backend" / "rules" / "external" / "yara-rules")),
+    os.getenv("YARA_RULES_PATH", str(BUNDLE_ROOT / "backend" / "rules" / "external" / "elastic")),
 )
 YARA_RULE_SOURCE_LABELS = {
     "local": "local-critical",
     "external": "external-extended",
 }
-DEFAULT_WAZUH_ALERT_LOG = str(PROJECT_ROOT / "logs" / "wazuh_alerts.jsonl")
-DEFAULT_TEST_ARTIFACT_DIR = str(PROJECT_ROOT / "logs" / "test_artifacts")
+DEFAULT_WAZUH_ALERT_LOG = os.getenv(
+    "WAZUH_ALERT_LOG_PATH",
+    str(PROJECT_ROOT / "logs" / "wazuh_alerts.jsonl"),
+)
 FRONTEND_DIR = BUNDLE_ROOT / "frontend"
 
 
@@ -107,66 +110,6 @@ LOG_SOURCES = {"wazuh", "yara", "response"}
 INCIDENTS = []
 INCIDENTS_LOCK = Lock()
 MAX_INCIDENTS = 100
-TEST_ALERT_PRESETS = {
-    "powershell_persistence": {
-        "label": "PowerShell Persistence",
-        "description": "Creates a harmless PowerShell-style persistence artifact and runs a safe marker script inside the project test folder.",
-        "filename": "safe_persistence_probe.ps1",
-        "content": (
-            "# Safe EDR persistence simulation\n"
-            "$encoded = 'VEVTVA=='\n"
-            "$webClient = 'Net.WebClient'\n"
-            "Write-Output 'Safe persistence probe only.'\n"
-        ),
-        "rule_description": "Suspicious PowerShell persistence behavior",
-        "groups": ["sysmon", "malware", "persistence"],
-        "level": 10,
-        "execute_runtime_test": True,
-    },
-    "macro_dropper": {
-        "label": "Office Macro Dropper",
-        "description": "Creates a harmless fake macro-enabled document artifact for triage and alert testing. No code is executed.",
-        "filename": "invoice_macro_dropper.docm",
-        "content": (
-            "Safe EDR test artifact.\n"
-            "This is not a real Office macro document.\n"
-            "It exists only to simulate a suspicious .docm file path.\n"
-        ),
-        "rule_description": "Suspicious Office macro dropper pattern",
-        "groups": ["office", "malware", "execution"],
-        "level": 8,
-        "execute_runtime_test": False,
-    },
-    "startup_link": {
-        "label": "Startup Shortcut",
-        "description": "Creates a harmless shortcut-like artifact in the test folder to simulate persistence through startup entries. No code is executed.",
-        "filename": "startup_update.lnk",
-        "content": (
-            "Safe EDR test artifact.\n"
-            "This is not a real Windows shortcut.\n"
-            "It only simulates a suspicious startup path for the dashboard.\n"
-        ),
-        "rule_description": "Suspicious startup shortcut persistence",
-        "groups": ["windows", "persistence", "startup"],
-        "level": 7,
-        "execute_runtime_test": False,
-    },
-    "script_dropper": {
-        "label": "Script Dropper",
-        "description": "Creates a harmless JavaScript-like artifact that imitates a downloader script. No code is executed.",
-        "filename": "browser_update_dropper.js",
-        "content": (
-            "// Safe EDR test artifact\n"
-            "// No network activity, no execution, no payload.\n"
-            "const pretendDownload = 'DownloadString';\n"
-            "console.log('Safe script dropper simulation');\n"
-        ),
-        "rule_description": "Suspicious script downloader behavior",
-        "groups": ["malware", "downloader", "script"],
-        "level": 9,
-        "execute_runtime_test": False,
-    },
-}
 SUSPICIOUS_FILE_EXTENSIONS = {
     ".exe", ".dll", ".sys", ".scr", ".msi", ".bat", ".cmd", ".ps1", ".vbs",
     ".js", ".jse", ".hta", ".jar", ".lnk", ".docm", ".xlsm", ".pptm",
@@ -371,12 +314,13 @@ def broadcast_log(source: str, message: str, username: str | None = None, persis
                 pass
 
 
-def recommend_response(level: int, file_path: str | None, yara_result: dict | None = None):
+def recommend_response(level: int, file_path: str | None, yara_result: dict | None = None, alert_fields: dict | None = None):
     actions = []
+    alert_fields = alert_fields or {}
 
     if yara_result and yara_result.get("status") == "matched":
         actions.append("Isolate the affected endpoint from the network")
-        actions.append("Quarantine or remove the matched file")
+        actions.append("Quarantine the matched file")
         actions.append("Preserve the host and Wazuh logs for triage")
     elif level >= 10:
         actions.append("Prioritize analyst triage and isolate the host if behavior persists")
@@ -389,6 +333,10 @@ def recommend_response(level: int, file_path: str | None, yara_result: dict | No
 
     if file_path:
         actions.append(f"Track remediation status for file: {file_path}")
+    if alert_fields.get("process_id"):
+        actions.append(f"Stop the suspicious process if still running: PID {alert_fields['process_id']}")
+    if alert_fields.get("destination_ip"):
+        actions.append(f"Block outbound traffic to destination IP: {alert_fields['destination_ip']}")
 
     return actions
 
@@ -452,133 +400,125 @@ def get_incident(incident_id: str, username: str):
     return None
 
 
-def append_wazuh_alert(alert: dict):
-    os.makedirs(os.path.dirname(DEFAULT_WAZUH_ALERT_LOG), exist_ok=True)
-    with open(DEFAULT_WAZUH_ALERT_LOG, "a", encoding="utf-8") as file_handle:
-        file_handle.write(f"{json.dumps(alert, ensure_ascii=False)}\n")
+def parse_process_id(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text, 16) if text.lower().startswith("0x") else int(text)
+    except ValueError:
+        return None
 
 
-def list_test_alert_presets():
-    return [
-        {
-            "id": preset_id,
-            "label": preset["label"],
-            "description": preset["description"],
-            "execute_runtime_test": preset["execute_runtime_test"],
-        }
-        for preset_id, preset in TEST_ALERT_PRESETS.items()
-    ]
+def calculate_file_sha256(file_path: str):
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def ensure_default_test_artifact():
-    os.makedirs(DEFAULT_TEST_ARTIFACT_DIR, exist_ok=True)
-    artifact_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, "update.ps1")
-    if not os.path.exists(artifact_path):
-        with open(artifact_path, "w", encoding="utf-8") as file_handle:
-            file_handle.write("Write-Output 'Mock suspicious PowerShell persistence script'\n")
-    return artifact_path
+def sanitize_quarantine_name(name: str):
+    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in name) or "quarantined_file"
 
 
-def create_safe_test_artifact(preset_id: str) -> str:
-    preset = TEST_ALERT_PRESETS[preset_id]
-    os.makedirs(DEFAULT_TEST_ARTIFACT_DIR, exist_ok=True)
-    artifact_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, preset["filename"])
-    content = preset["content"]
-    if preset.get("execute_runtime_test"):
-        marker_path = os.path.join(DEFAULT_TEST_ARTIFACT_DIR, "safe_runtime_marker.txt")
-        content += f"Set-Content -Path '{marker_path}' -Value 'Safe runtime test completed.'\n"
-    with open(artifact_path, "w", encoding="utf-8") as file_handle:
-        file_handle.write(content)
-    return artifact_path
+def quarantine_incident_file(incident: dict, username: str):
+    file_path = incident.get("file_path")
+    if not file_path:
+        return "error", "Quarantine failed: no file path was available.", "error"
+    if not os.path.isfile(file_path):
+        return "error", f"Quarantine failed: target file does not exist. {file_path}", "error"
+
+    quarantine_dir = PROJECT_ROOT / "quarantine" / sanitize_username_for_path(username)
+    os.makedirs(quarantine_dir, exist_ok=True)
+
+    original_name = sanitize_quarantine_name(os.path.basename(file_path))
+    target_path = quarantine_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{incident['id'][:8]}_{original_name}"
+    file_hash = calculate_file_sha256(file_path)
+    shutil.move(file_path, target_path)
+
+    metadata = {
+        "incident_id": incident["id"],
+        "original_path": file_path,
+        "quarantine_path": str(target_path),
+        "sha256": file_hash,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "username": username,
+    }
+    metadata_path = quarantine_dir / "manifest.jsonl"
+    with open(metadata_path, "a", encoding="utf-8") as file_handle:
+        file_handle.write(f"{json.dumps(metadata, ensure_ascii=False)}\n")
+
+    incident["file_path"] = str(target_path)
+    incident["file_exists"] = True
+    incident["quarantine_original_path"] = file_path
+    incident["quarantine_path"] = str(target_path)
+    incident["file_sha256"] = file_hash
+    return "quarantined", f"Quarantine success: file moved to {target_path}", "success"
 
 
-def get_desktop_directory() -> Path:
-    one_drive = os.environ.get("OneDrive")
-    if one_drive:
-        desktop = Path(one_drive) / "Desktop"
-        if desktop.exists():
-            return desktop
-    return Path.home() / "Desktop"
-
-
-def create_wazuh_runtime_test_script() -> str:
-    desktop_dir = get_desktop_directory()
-    desktop_dir.mkdir(parents=True, exist_ok=True)
-    script_path = desktop_dir / "wazuh_runtime_test.ps1"
-    marker_path = desktop_dir / "wazuh_runtime_marker.txt"
-    script_body = (
-        "# Harmless Wazuh runtime test artifact\n"
-        "$banner = 'powershell -enc VEVTVA=='\n"
-        "$decoded = [System.Convert]::FromBase64String('VEVTVA==')\n"
-        "$webClient = 'Net.WebClient'\n"
-        "$downloadString = 'DownloadString'\n"
-        f"Set-Content -Path '{marker_path}' -Value 'Wazuh runtime test completed.'\n"
-        "Write-Output 'Wazuh runtime test script executed.'\n"
-    )
-    script_path.write_text(script_body, encoding="utf-8")
-    return str(script_path)
-
-
-def trigger_wazuh_runtime_test(script_path: str) -> dict:
-    invocation = f"& '{script_path}'"
-    encoded_command = base64.b64encode(invocation.encode("utf-16le")).decode("ascii")
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-EncodedCommand", encoded_command,
-    ]
+def terminate_incident_process(incident: dict):
+    pid = parse_process_id(incident.get("process_id"))
+    if not pid:
+        return "error", "Terminate failed: no process ID was captured from the Wazuh alert.", "error"
+    if pid <= 4 or pid in {os.getpid(), os.getppid()}:
+        return "error", f"Terminate refused: protected process ID {pid}.", "error"
 
     try:
         completed = subprocess.run(
-            command,
+            ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             text=True,
             timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
         )
-    except OSError as exc:
-        return {
-            "status": "error",
-            "message": f"Failed to start the PowerShell runtime test: {exc}",
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "The PowerShell runtime test timed out before finishing.",
-        }
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "error", f"Terminate failed for PID {pid}: {exc}", "error"
 
     if completed.returncode != 0:
-        stderr = (completed.stderr or completed.stdout or "").strip()
-        return {
-            "status": "error",
-            "message": f"PowerShell runtime test failed: {stderr or f'exit code {completed.returncode}'}",
-        }
+        message = (completed.stderr or completed.stdout or "").strip()
+        return "error", f"Terminate failed for PID {pid}: {message or completed.returncode}", "error"
 
-    return {
-        "status": "executed",
-        "message": "PowerShell runtime test executed successfully.",
-    }
+    incident["process_terminated"] = True
+    return "terminated", f"Terminate success: process tree for PID {pid} was stopped.", "success"
 
 
-def build_test_alert_payload(preset_id: str, file_path: str, username: str) -> dict:
-    preset = TEST_ALERT_PRESETS[preset_id]
-    return {
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-        "username": username,
-        "agent": {
-            "name": "win-lab-endpoint",
-        },
-        "rule": {
-            "level": preset["level"],
-            "description": preset["rule_description"],
-            "groups": preset["groups"],
-        },
-        "syscheck": {
-            "path": file_path,
-        },
-    }
+def block_incident_ip(incident: dict):
+    destination_ip = (incident.get("destination_ip") or "").strip()
+    if not destination_ip:
+        return "error", "Block IP failed: no destination IP was captured from the Wazuh alert.", "error"
+
+    try:
+        ipaddress.ip_address(destination_ip)
+    except ValueError:
+        return "error", f"Block IP failed: destination is not a valid IP address. {destination_ip}", "error"
+
+    rule_name = f"CapstoneEDR Block {destination_ip} {incident['id'][:8]}"
+    try:
+        completed = subprocess.run(
+            [
+                "netsh.exe", "advfirewall", "firewall", "add", "rule",
+                f"name={rule_name}", "dir=out", "action=block", f"remoteip={destination_ip}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "error", f"Block IP failed for {destination_ip}: {exc}", "error"
+
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip()
+        return "error", f"Block IP failed for {destination_ip}: {message or completed.returncode}", "error"
+
+    incident["blocked_ip"] = destination_ip
+    incident["firewall_rule"] = rule_name
+    return "blocked", f"Block IP success: outbound traffic to {destination_ip} is blocked.", "success"
 
 
 def get_external_rules_path():
@@ -620,6 +560,8 @@ def process_wazuh_alert(event: dict):
     level = event.get("level", 0)
     file_path = event.get("file_path")
     groups = event.get("groups", [])
+    mitre = event.get("mitre", {})
+    alert_fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
     username = event.get("username")
 
     broadcast_log("wazuh", message, username)
@@ -631,8 +573,15 @@ def process_wazuh_alert(event: dict):
         broadcast_log("yara", "[Yara VERIFY] Skipped file verification because the Wazuh event did not include a file path.", username)
 
     risk_score, risk_label = calculate_risk(level, file_path, groups, yara_result)
-    response_actions = recommend_response(level, file_path, yara_result)
-    decision_hint = "delete" if risk_score >= 70 or (yara_result and yara_result.get("status") == "matched") else "keep"
+    response_actions = recommend_response(level, file_path, yara_result, alert_fields)
+    if yara_result and yara_result.get("status") == "matched" and file_path:
+        decision_hint = "quarantine"
+    elif alert_fields.get("process_id") and risk_score >= 70:
+        decision_hint = "terminate_process"
+    elif alert_fields.get("destination_ip") and risk_score >= 70:
+        decision_hint = "block_ip"
+    else:
+        decision_hint = "keep"
     response_message = (
         f"Risk {risk_label.upper()} ({risk_score}) | Suggested decision: {decision_hint.upper()} | "
         + " ; ".join(response_actions)
@@ -650,6 +599,21 @@ def process_wazuh_alert(event: dict):
         "file_path": file_path,
         "file_exists": bool(file_path and os.path.isfile(file_path)),
         "groups": groups,
+        "mitre": mitre,
+        "rule_id": alert_fields.get("rule_id"),
+        "rule_description": alert_fields.get("rule_description"),
+        "agent_name": alert_fields.get("agent_name"),
+        "agent_id": alert_fields.get("agent_id"),
+        "process_id": alert_fields.get("process_id"),
+        "process_guid": alert_fields.get("process_guid"),
+        "process_image": alert_fields.get("process_image"),
+        "parent_process_image": alert_fields.get("parent_process_image"),
+        "command_line": alert_fields.get("command_line"),
+        "destination_ip": alert_fields.get("destination_ip"),
+        "destination_hostname": alert_fields.get("destination_hostname"),
+        "destination_port": alert_fields.get("destination_port"),
+        "registry_key": alert_fields.get("registry_key"),
+        "registry_value": alert_fields.get("registry_value"),
         "yara_status": yara_result.get("status") if yara_result else "skipped",
         "yara_matches": yara_result.get("matches", []) if yara_result else [],
         "risk_score": risk_score,
@@ -732,96 +696,32 @@ def decide_incident(incident_id: str, payload: dict, current_user: dict = Depend
         }
 
     action = (payload or {}).get("action", "").strip().lower()
-    if action not in {"delete", "keep"}:
+    if action not in {"quarantine", "terminate_process", "block_ip", "keep"}:
         return {
             "status": "invalid action",
             "result_message": "Invalid incident action.",
             "result_type": "error",
         }
 
-    if action == "delete":
-        file_path = incident.get("file_path")
-        if not file_path:
-            incident["status"] = "error"
-            incident["decision"] = "delete"
-            incident["decision_note"] = "No file path was available for deletion."
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: no file path available.", current_user["username"])
-            return {
-                "status": "error",
-                "incident": incident.copy(),
-                "result_message": "Delete failed: no file path was available.",
-                "result_type": "error",
-            }
+    if action == "quarantine":
+        status_value, result_message, result_type = quarantine_incident_file(incident, current_user["username"])
+    elif action == "terminate_process":
+        status_value, result_message, result_type = terminate_incident_process(incident)
+    elif action == "block_ip":
+        status_value, result_message, result_type = block_incident_ip(incident)
+    else:
+        status_value, result_message, result_type = "kept", "Incident marked as kept for monitoring.", "info"
 
-        if not os.path.exists(file_path):
-            incident["status"] = "deleted"
-            incident["decision"] = "delete"
-            incident["decision_note"] = "File was already missing when delete was requested."
-            broadcast_log("response", f"[Response] File already absent for incident {incident_id}: {file_path}", current_user["username"])
-            return {
-                "status": "deleted",
-                "incident": incident.copy(),
-                "result_message": f"Delete success: file was already absent. {file_path}",
-                "result_type": "success",
-            }
-
-        if not os.path.isfile(file_path):
-            incident["status"] = "error"
-            incident["decision"] = "delete"
-            incident["decision_note"] = "Target path is not a file."
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: target is not a file.", current_user["username"])
-            return {
-                "status": "error",
-                "incident": incident.copy(),
-                "result_message": f"Delete failed: target path is not a file. {file_path}",
-                "result_type": "error",
-            }
-
-        try:
-            os.remove(file_path)
-            deleted = not os.path.exists(file_path)
-            incident["status"] = "deleted"
-            incident["decision"] = "delete"
-            incident["decision_note"] = f"File deleted: {file_path}" if deleted else f"Delete was attempted, but the file still exists: {file_path}"
-            if deleted:
-                broadcast_log("response", f"[Response] File deleted for incident {incident_id}: {file_path}", current_user["username"])
-                return {
-                    "status": "deleted",
-                    "incident": incident.copy(),
-                    "result_message": f"Delete success: file removed. {file_path}",
-                    "result_type": "success",
-                }
-
-            incident["status"] = "error"
-            incident["decision_note"] = f"Delete failed: file still exists after os.remove. {file_path}"
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: file still exists after removal attempt.", current_user["username"])
-            return {
-                "status": "error",
-                "incident": incident.copy(),
-                "result_message": f"Delete failed: file still exists after removal attempt. {file_path}",
-                "result_type": "error",
-            }
-        except OSError as exc:
-            incident["status"] = "error"
-            incident["decision"] = "delete"
-            incident["decision_note"] = f"Delete failed: {exc}"
-            broadcast_log("response", f"[Response] Delete failed for incident {incident_id}: {exc}", current_user["username"])
-            return {
-                "status": "error",
-                "incident": incident.copy(),
-                "result_message": f"Delete failed: {exc}",
-                "result_type": "error",
-            }
-
-    incident["status"] = "kept"
-    incident["decision"] = "keep"
-    incident["decision_note"] = "Analyst chose to keep the file and continue monitoring."
-    broadcast_log("response", f"[Response] Incident {incident_id} marked as kept for monitoring.", current_user["username"])
+    if status_value != "error":
+        incident["status"] = status_value
+    incident["decision"] = action
+    incident["decision_note"] = result_message
+    broadcast_log("response", f"[Response] {result_message}", current_user["username"])
     return {
-        "status": "kept",
+        "status": status_value,
         "incident": incident.copy(),
-        "result_message": "Incident marked as kept for monitoring.",
-        "result_type": "info",
+        "result_message": result_message,
+        "result_type": result_type,
     }
 
 
@@ -910,51 +810,6 @@ def stop_wazuh(current_user: dict = Depends(require_auth)):
         wazuh_thread = None
         return {"status": "stopped"}
     return {"status": "not running"}
-
-
-@app.get("/api/wazuh/test-alert-presets")
-def get_test_alert_presets(current_user: dict = Depends(require_auth)):
-    return {"presets": list_test_alert_presets()}
-
-
-@app.post("/api/wazuh/test-alert")
-def create_test_wazuh_alert(payload: dict | None = None, current_user: dict = Depends(require_auth)):
-    preset_id = (payload or {}).get("preset_id", "powershell_persistence")
-    if preset_id not in TEST_ALERT_PRESETS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown test alert preset.")
-
-    preset = TEST_ALERT_PRESETS[preset_id]
-    requested_path = None
-    if payload and isinstance(payload.get("file_path"), str):
-        requested_path = payload["file_path"].strip()
-
-    if requested_path and not os.path.isfile(requested_path):
-        return {
-            "status": "error",
-            "message": f"Requested test file does not exist: {requested_path}",
-        }
-
-    test_file_path = requested_path or create_safe_test_artifact(preset_id)
-    runtime_result = (
-        trigger_wazuh_runtime_test(test_file_path)
-        if preset.get("execute_runtime_test")
-        else {"status": "prepared", "message": "Safe test artifact prepared without executing any script."}
-    )
-
-    alert = build_test_alert_payload(preset_id, test_file_path, current_user["username"])
-    append_wazuh_alert(alert)
-    broadcast_log(
-        "response",
-        f"[Response] Test alert queued by {current_user['username']} using preset {preset['label']}.",
-        current_user["username"],
-    )
-    return {
-        "status": "queued",
-        "preset_id": preset_id,
-        "preset_label": preset["label"],
-        "alert": alert,
-        "runtime_test": runtime_result,
-    }
 
 
 def on_yara_finished():

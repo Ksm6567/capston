@@ -10,7 +10,6 @@ let logViewerUsername = localStorage.getItem('edrLogViewerUsername') || currentU
 let isWazuhRunning = false;
 let isYaraRunning = false;
 let responseDashboardActive = false;
-let testAlertPresets = [];
 let incidentRefreshTimer = null;
 let incidentPollingHandle = null;
 let lastDecisionFeedback = null;
@@ -40,10 +39,6 @@ const responsePanelTitle = document.getElementById('response-panel-title');
 const responsePanelCopy = document.getElementById('response-panel-copy');
 const monitorConsoleGrid = document.getElementById('monitor-console-grid');
 const yaraModal = document.getElementById('yara-modal');
-const testAlertModal = document.getElementById('test-alert-modal');
-const testAlertPresetSelect = document.getElementById('test-alert-preset-select');
-const testAlertPresetDescription = document.getElementById('test-alert-preset-description');
-const runTestAlertButton = document.getElementById('btn-run-test-alert');
 const yaraDirectoryStatus = document.getElementById('yara-directory-status');
 const yaraSelectedSummary = document.getElementById('yara-selected-summary');
 const yaraDirectoryList = document.getElementById('yara-directory-list');
@@ -90,7 +85,7 @@ function setResponseDashboardActive(active) {
         topbarTitle.textContent = 'Incident Dashboard';
         responsePanelLabel.textContent = 'Response Workflow';
         responsePanelTitle.textContent = 'Malware containment and response actions';
-        responsePanelCopy.textContent = 'Review detections, remove malicious files, open suspicious folders, and keep or stop response actions from one focused dashboard.';
+        responsePanelCopy.textContent = 'Review detections, quarantine suspicious files, stop processes, block network indicators, and keep monitored activity from one focused dashboard.';
         responseDashboard.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
     }
@@ -371,84 +366,6 @@ async function toggleYaraMonitor() {
     }
 }
 
-function updateTestAlertPresetDetails() {
-    const preset = testAlertPresets.find((item) => item.id === testAlertPresetSelect.value);
-    if (!preset) {
-        testAlertPresetDescription.textContent = 'Select a safe test scenario.';
-        runTestAlertButton.disabled = true;
-        return;
-    }
-
-    testAlertPresetDescription.textContent = `${preset.description} ${preset.execute_runtime_test ? 'This preset also runs a safe local marker script inside the test folder.' : 'This preset only creates a harmless file artifact.'}`;
-    runTestAlertButton.disabled = false;
-}
-
-async function openTestAlertModal() {
-    testAlertModal.style.display = 'block';
-    testAlertPresetSelect.innerHTML = '<option value="">Loading...</option>';
-    testAlertPresetDescription.textContent = 'Loading preset details...';
-    runTestAlertButton.disabled = true;
-
-    try {
-        const res = await fetchAuthed('/api/wazuh/test-alert-presets');
-        const data = await res.json();
-        testAlertPresets = Array.isArray(data.presets) ? data.presets : [];
-        testAlertPresetSelect.innerHTML = '';
-
-        testAlertPresets.forEach((preset) => {
-            const option = document.createElement('option');
-            option.value = preset.id;
-            option.textContent = preset.label;
-            testAlertPresetSelect.appendChild(option);
-        });
-
-        if (testAlertPresets.length) {
-            testAlertPresetSelect.value = testAlertPresets[0].id;
-        } else {
-            testAlertPresetSelect.innerHTML = '<option value="">No presets available</option>';
-        }
-        updateTestAlertPresetDetails();
-    } catch (error) {
-        testAlertPresetSelect.innerHTML = '<option value="">Failed to load presets</option>';
-        testAlertPresetDescription.textContent = 'Failed to load safe test presets from the backend.';
-    }
-}
-
-function closeTestAlertModal() {
-    testAlertModal.style.display = 'none';
-}
-
-async function runSelectedTestAlert() {
-    const presetId = testAlertPresetSelect.value;
-    if (!presetId) {
-        return;
-    }
-
-    try {
-        runTestAlertButton.disabled = true;
-        const res = await fetchAuthed('/api/wazuh/test-alert', {
-            method: 'POST',
-            body: JSON.stringify({ preset_id: presetId }),
-        });
-        const data = await res.json();
-        lastDecisionFeedback = {
-            message: `${data.preset_label || 'Test alert'} queued. ${data.runtime_test?.message || ''}`.trim(),
-            type: data.runtime_test?.status === 'error' ? 'error' : 'info',
-        };
-        closeTestAlertModal();
-        renderIncidentSummary([]);
-        scheduleIncidentRefresh();
-    } catch (e) {
-        lastDecisionFeedback = {
-            message: 'Failed to run the Wazuh runtime test.',
-            type: 'error',
-        };
-        renderIncidentSummary([]);
-    } finally {
-        runTestAlertButton.disabled = false;
-    }
-}
-
 function updateWazuhUI(isRunning) {
     isWazuhRunning = isRunning;
     const btn = document.getElementById('btn-wazuh');
@@ -665,6 +582,22 @@ function buildRiskLabel(incident) {
     return `${incident.risk_label.toUpperCase()} ${incident.risk_score}`;
 }
 
+function formatDecisionLabel(value) {
+    return String(value || 'keep').replaceAll('_', ' ').toUpperCase();
+}
+
+function buildIncidentDetailItems(incident) {
+    return [
+        ['Rule', incident.rule_id ? `${incident.rule_id} ${incident.rule_description || ''}`.trim() : incident.rule_description],
+        ['Agent', incident.agent_name],
+        ['Process', incident.process_id ? `PID ${incident.process_id}${incident.process_image ? ` | ${incident.process_image}` : ''}` : incident.process_image],
+        ['Parent', incident.parent_process_image],
+        ['Command', incident.command_line],
+        ['Network', incident.destination_ip ? `${incident.destination_ip}${incident.destination_port ? `:${incident.destination_port}` : ''}` : incident.destination_hostname],
+        ['Registry', incident.registry_key],
+    ].filter(([, value]) => value);
+}
+
 function renderIncidentSummary(incidents) {
     const activeIncidents = incidents.filter((incident) => incident.status === 'pending');
     responseSummary.className = 'response-summary';
@@ -731,8 +664,22 @@ function renderIncidents(incidents) {
         const fileState = document.createElement('div');
         fileState.className = `incident-file-state ${incident.file_exists ? 'file-present' : 'file-missing'}`;
         fileState.textContent = incident.file_exists
-            ? 'Delete target is available.'
-            : 'Delete target does not exist on disk.';
+            ? 'Quarantine target is available.'
+            : 'No file target is available for quarantine.';
+
+        const observables = document.createElement('div');
+        observables.className = 'incident-observables';
+        const detailItems = buildIncidentDetailItems(incident);
+        if (detailItems.length) {
+            detailItems.forEach(([label, value]) => {
+                const item = document.createElement('div');
+                item.className = 'incident-observable';
+                item.textContent = `${label}: ${value}`;
+                observables.appendChild(item);
+            });
+        } else {
+            observables.textContent = 'No process, network, or registry fields were captured from this alert.';
+        }
 
         const yara = document.createElement('div');
         yara.className = 'incident-yara';
@@ -742,7 +689,7 @@ function renderIncidents(incidents) {
 
         const suggestion = document.createElement('div');
         suggestion.className = 'incident-suggestion';
-        suggestion.textContent = `Suggested decision: ${incident.suggested_decision.toUpperCase()}`;
+        suggestion.textContent = `Suggested decision: ${formatDecisionLabel(incident.suggested_decision)}`;
 
         const note = document.createElement('div');
         note.className = 'incident-note';
@@ -758,12 +705,26 @@ function renderIncidents(incidents) {
         openFolderButton.disabled = !incident.file_exists;
         openFolderButton.addEventListener('click', () => openIncidentFolder(incident.id));
 
-        const deleteButton = document.createElement('button');
-        deleteButton.type = 'button';
-        deleteButton.className = 'btn danger';
-        deleteButton.textContent = 'Delete';
-        deleteButton.disabled = !incident.file_exists;
-        deleteButton.addEventListener('click', () => submitIncidentDecision(incident.id, 'delete'));
+        const quarantineButton = document.createElement('button');
+        quarantineButton.type = 'button';
+        quarantineButton.className = 'btn secondary';
+        quarantineButton.textContent = 'Quarantine';
+        quarantineButton.disabled = !incident.file_exists;
+        quarantineButton.addEventListener('click', () => submitIncidentDecision(incident.id, 'quarantine'));
+
+        const terminateButton = document.createElement('button');
+        terminateButton.type = 'button';
+        terminateButton.className = 'btn danger';
+        terminateButton.textContent = 'Terminate Process';
+        terminateButton.disabled = !incident.process_id;
+        terminateButton.addEventListener('click', () => submitIncidentDecision(incident.id, 'terminate_process'));
+
+        const blockIpButton = document.createElement('button');
+        blockIpButton.type = 'button';
+        blockIpButton.className = 'btn danger';
+        blockIpButton.textContent = 'Block IP';
+        blockIpButton.disabled = !incident.destination_ip;
+        blockIpButton.addEventListener('click', () => submitIncidentDecision(incident.id, 'block_ip'));
 
         const keepButton = document.createElement('button');
         keepButton.type = 'button';
@@ -772,7 +733,9 @@ function renderIncidents(incidents) {
         keepButton.addEventListener('click', () => submitIncidentDecision(incident.id, 'keep'));
 
         actions.appendChild(openFolderButton);
-        actions.appendChild(deleteButton);
+        actions.appendChild(quarantineButton);
+        actions.appendChild(terminateButton);
+        actions.appendChild(blockIpButton);
         actions.appendChild(keepButton);
 
         card.appendChild(header);
@@ -780,6 +743,7 @@ function renderIncidents(incidents) {
         card.appendChild(message);
         card.appendChild(file);
         card.appendChild(fileState);
+        card.appendChild(observables);
         card.appendChild(yara);
         card.appendChild(suggestion);
         card.appendChild(note);
@@ -1137,9 +1101,6 @@ window.onclick = function(event) {
     }
     if (event.target === yaraModal) {
         closeYaraDirectoryModal();
-    }
-    if (event.target === testAlertModal) {
-        closeTestAlertModal();
     }
 };
 

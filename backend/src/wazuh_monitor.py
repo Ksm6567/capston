@@ -18,18 +18,98 @@ class WazuhMonitor(Thread):
         if self.callback:
             self.callback(payload)
 
-    def extract_file_path(self, alert):
-        candidate_paths = [
-            alert.get("syscheck", {}).get("path"),
-            alert.get("file", {}).get("path"),
-            alert.get("data", {}).get("file"),
-            alert.get("data", {}).get("path"),
-            alert.get("data", {}).get("win", {}).get("eventdata", {}).get("targetFilename"),
-        ]
-        for candidate in candidate_paths:
-            if isinstance(candidate, str) and candidate.strip():
-                return os.path.normpath(candidate)
+    def get_nested(self, source, path):
+        current = source
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return current
+
+    def first_value(self, alert, paths):
+        for path in paths:
+            value = self.get_nested(alert, path)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, int):
+                return value
         return None
+
+    def extract_file_path(self, alert):
+        candidate = self.first_value(alert, [
+            ["syscheck", "path"],
+            ["file", "path"],
+            ["data", "file"],
+            ["data", "path"],
+            ["data", "win", "eventdata", "targetFilename"],
+            ["win", "eventdata", "targetFilename"],
+        ])
+        if isinstance(candidate, str):
+            return os.path.normpath(candidate)
+        return None
+
+    def extract_alert_fields(self, alert):
+        return {
+            "rule_id": self.first_value(alert, [["rule", "id"]]),
+            "rule_description": self.first_value(alert, [["rule", "description"]]),
+            "agent_name": self.first_value(alert, [["agent", "name"]]),
+            "agent_id": self.first_value(alert, [["agent", "id"]]),
+            "process_id": self.first_value(alert, [
+                ["data", "win", "eventdata", "processId"],
+                ["data", "win", "eventdata", "processID"],
+                ["data", "win", "eventdata", "newProcessId"],
+                ["win", "eventdata", "processId"],
+                ["win", "eventdata", "newProcessId"],
+                ["process", "pid"],
+            ]),
+            "process_guid": self.first_value(alert, [
+                ["data", "win", "eventdata", "processGuid"],
+                ["win", "eventdata", "processGuid"],
+            ]),
+            "process_image": self.first_value(alert, [
+                ["data", "win", "eventdata", "image"],
+                ["data", "win", "eventdata", "newProcessName"],
+                ["win", "eventdata", "image"],
+                ["win", "eventdata", "newProcessName"],
+                ["process", "name"],
+            ]),
+            "parent_process_image": self.first_value(alert, [
+                ["data", "win", "eventdata", "parentImage"],
+                ["data", "win", "eventdata", "parentProcessName"],
+                ["win", "eventdata", "parentImage"],
+                ["win", "eventdata", "parentProcessName"],
+            ]),
+            "command_line": self.first_value(alert, [
+                ["data", "win", "eventdata", "commandLine"],
+                ["data", "win", "eventdata", "processCommandLine"],
+                ["win", "eventdata", "commandLine"],
+                ["win", "eventdata", "processCommandLine"],
+                ["process", "command_line"],
+            ]),
+            "destination_ip": self.first_value(alert, [
+                ["data", "win", "eventdata", "destinationIp"],
+                ["win", "eventdata", "destinationIp"],
+                ["data", "dstip"],
+            ]),
+            "destination_hostname": self.first_value(alert, [
+                ["data", "win", "eventdata", "destinationHostname"],
+                ["win", "eventdata", "destinationHostname"],
+            ]),
+            "destination_port": self.first_value(alert, [
+                ["data", "win", "eventdata", "destinationPort"],
+                ["win", "eventdata", "destinationPort"],
+                ["data", "dstport"],
+            ]),
+            "registry_key": self.first_value(alert, [
+                ["data", "win", "eventdata", "targetObject"],
+                ["win", "eventdata", "targetObject"],
+                ["syscheck", "path"],
+            ]),
+            "registry_value": self.first_value(alert, [
+                ["data", "win", "eventdata", "details"],
+                ["win", "eventdata", "details"],
+            ]),
+        }
 
     def normalize_event(self, alert):
         rule = alert.get("rule", {}) if isinstance(alert.get("rule"), dict) else {}
@@ -37,7 +117,9 @@ class WazuhMonitor(Thread):
         description = rule.get("description") or "Unknown Wazuh rule"
         level = rule.get("level", "n/a")
         groups = rule.get("groups", [])
+        mitre = rule.get("mitre", {})
         file_path = self.extract_file_path(alert)
+        fields = self.extract_alert_fields(alert)
         agent_name = agent.get("name") or "standalone-agent"
         file_suffix = f" | File: {file_path}" if file_path else ""
         message = f"[Wazuh ALERT] Level {level} | Agent: {agent_name} | Rule: {description}{file_suffix}"
@@ -47,6 +129,8 @@ class WazuhMonitor(Thread):
             "level": level if isinstance(level, int) else 0,
             "file_path": file_path,
             "groups": groups if isinstance(groups, list) else [],
+            "mitre": mitre if isinstance(mitre, dict) else {},
+            "fields": fields,
             "kind": "alert",
             "username": alert.get("username"),
         }

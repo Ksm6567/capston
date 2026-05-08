@@ -53,10 +53,6 @@
                     <span class="nav-btn-title">Response</span>
                     <span class="nav-btn-copy">Open the incident response dashboard for delete and containment actions</span>
                 </button>
-                <button id="btn-test-alert" class="btn nav-btn" onclick="openTestAlertModal()">
-                    <span class="nav-btn-title">Test Alert</span>
-                    <span class="nav-btn-copy">Run the current test alert workflow without changing dashboard focus</span>
-                </button>
                 <button id="btn-logs" class="btn nav-btn accent" onclick="openLogViewer()">
                     <span class="nav-btn-title">Log</span>
                     <span class="nav-btn-copy">Open archived detections and response history</span>
@@ -122,23 +118,6 @@
             <div class="modal-actions">
                 <button class="btn ghost" onclick="closeYaraDirectoryModal()">Cancel</button>
                 <button id="btn-start-yara-selected" class="btn secondary" onclick="startSelectedYaraScan()">Start Selected Scan</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="test-alert-modal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeTestAlertModal()">&times;</span>
-            <h2>Run Safe Test Alert</h2>
-            <p class="modal-copy">Choose a harmless test scenario. These presets only create safe artifacts inside the project test folder and queue a simulated Wazuh alert.</p>
-            <label class="auth-label" for="test-alert-preset-select">Test Type</label>
-            <select id="test-alert-preset-select" onchange="updateTestAlertPresetDetails()">
-                <option value="">Loading...</option>
-            </select>
-            <div id="test-alert-preset-description" class="selected-summary">Loading preset details...</div>
-            <div class="modal-actions">
-                <button class="btn ghost" onclick="closeTestAlertModal()">Cancel</button>
-                <button id="btn-run-test-alert" class="btn secondary" onclick="runSelectedTestAlert()">Run Test Alert</button>
             </div>
         </div>
     </div>

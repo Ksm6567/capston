@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("reversinglabs", "yara-rules", "signature-base")]
-    [string]$Source = "yara-rules",
+    [ValidateSet("elastic", "reversinglabs", "yara-rules", "signature-base")]
+    [string]$Source = "elastic",
 
     [string[]]$YaraRulesCategories = @(
         "malware",
@@ -16,6 +16,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $sources = @{
+    "elastic" = @{
+        GitUrl = "https://github.com/elastic/protections-artifacts.git"
+        SparsePaths = @("yara/rules")
+        InnerPath = "yara\rules"
+    }
     "reversinglabs" = @{
         Url = "https://github.com/reversinglabs/reversinglabs-yara-rules/archive/refs/heads/develop.zip"
         InnerPath = "reversinglabs-yara-rules-develop\yara"
@@ -41,9 +46,9 @@ New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
 
 try {
-    if ($Source -eq "yara-rules") {
-        $clonePath = Join-Path $tempRoot "rules"
-        Write-Host "Cloning selected Yara-Rules/rules categories..."
+    if ($sources[$Source].ContainsKey("GitUrl")) {
+        $clonePath = Join-Path $tempRoot $Source
+        Write-Host "Cloning selected $Source rule paths..."
         git clone --depth 1 --filter=blob:none --sparse $sources[$Source].GitUrl $clonePath
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed with exit code $LASTEXITCODE"
@@ -51,7 +56,12 @@ try {
 
         Push-Location $clonePath
         try {
-            git sparse-checkout set @YaraRulesCategories
+            if ($Source -eq "yara-rules") {
+                git sparse-checkout set @YaraRulesCategories
+            }
+            else {
+                git sparse-checkout set @($sources[$Source].SparsePaths)
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw "git sparse-checkout failed with exit code $LASTEXITCODE"
             }
@@ -60,7 +70,15 @@ try {
             Pop-Location
         }
 
-        $sourceRules = $clonePath
+        $sourceRules = if ($sources[$Source].ContainsKey("InnerPath")) {
+            Join-Path $clonePath $sources[$Source].InnerPath
+        }
+        else {
+            $clonePath
+        }
+        if (-not (Test-Path $sourceRules)) {
+            throw "Expected rules directory not found: $sourceRules"
+        }
     }
     else {
         Write-Host "Downloading $Source rules..."

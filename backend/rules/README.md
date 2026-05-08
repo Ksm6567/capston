@@ -5,7 +5,7 @@
 The app uses two rule tiers:
 
 - `local-critical`: always-on monitoring and all-drive scans.
-- `external-extended`: Wazuh single-file verification and user-selected folder scans using the external Yara-Rules/rules project.
+- `external-extended`: Wazuh single-file verification and user-selected folder scans using the configured external rules project.
 
 External extended rules are intentionally blocked for all-drive scans to protect backend responsiveness.
 
@@ -14,22 +14,29 @@ External extended rules are intentionally blocked for all-drive scans to protect
 Use `update_external_rules.ps1` to download a public ruleset into `backend/rules/external/<source>`.
 
 ```powershell
-.\backend\rules\update_external_rules.ps1 -Source yara-rules
+.\backend\rules\update_external_rules.ps1 -Source elastic
 ```
 
 To run the app with a custom external rules directory:
 
 ```powershell
-$env:YARA_EXTERNAL_RULES_PATH = "C:\Users\ybi65\OneDrive\Desktop\capstone\backend\rules\external\yara-rules"
+$env:YARA_EXTERNAL_RULES_PATH = "C:\Users\ybi65\OneDrive\Desktop\capstone\backend\rules\external\elastic"
 ```
 
 Then start the backend normally. The scanner compiles `.yar` and `.yara` files individually, so one invalid third-party rule file will be skipped instead of disabling the whole scan. Compiled rules are cached and recompiled only when the rule files change.
 
 Default source:
 
-- `yara-rules`: broad community ruleset from `https://github.com/Yara-Rules/rules`, GPL-2.0 license.
+- `elastic`: Elastic Security endpoint malware protection rules from `https://github.com/elastic/protections-artifacts`, Elastic License 2.0.
 
 Alternative sources:
 
+- `yara-rules`: broad community ruleset from `https://github.com/Yara-Rules/rules`, GPL-2.0 license.
 - `reversinglabs`: high-confidence malware detection rules, MIT license.
 - `signature-base`: high-quality hunting and IOC rules, DRL 1.1 license. Some files may require external variables.
+
+## Wazuh Rules
+
+Wazuh detection should use the official Wazuh manager ruleset. The app reads alerts produced by Wazuh and enriches them with YARA verification.
+
+Use `wazuh/sync_official_ruleset.ps1` to keep a local reference copy of the official Wazuh `rules`, `decoders`, and `lists` directories. Point the backend at the real Wazuh manager alert log with `WAZUH_ALERT_LOG_PATH`.
