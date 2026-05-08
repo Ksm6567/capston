@@ -5,10 +5,8 @@ import secrets
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote_plus
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine, text
-from sqlalchemy.engine import URL
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,14 +22,11 @@ PROJECT_ROOT = app_root()
 FALLBACK_LOG = PROJECT_ROOT / "logs" / "db_fallback.log"
 DB_ENABLED = True
 
-DB_HOST = os.environ.get("SIEM_DB_HOST", "127.0.0.1")
-DB_PORT = int(os.environ.get("SIEM_DB_PORT", "3306"))
-DB_NAME = os.environ.get("SIEM_DB_NAME", "siem_server")
-DB_USER = os.environ.get("SIEM_DB_USER", "root")
-DB_PASSWORD = os.environ.get("SIEM_DB_PASSWORD", "1111")
-DEFAULT_ADMIN_USERNAME = os.environ.get("SIEM_DEFAULT_USERNAME", "admin")
-DEFAULT_ADMIN_PASSWORD = os.environ.get("SIEM_DEFAULT_PASSWORD", "admin1234")
-SESSION_DURATION_HOURS = int(os.environ.get("SIEM_SESSION_HOURS", "12"))
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "edr.sqlite"
+DB_PATH = Path(os.environ.get("EDR_DB_PATH", str(DEFAULT_DB_PATH)))
+DEFAULT_ADMIN_USERNAME = os.environ.get("EDR_DEFAULT_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.environ.get("EDR_DEFAULT_PASSWORD", "admin1234")
+SESSION_DURATION_HOURS = int(os.environ.get("EDR_SESSION_HOURS", "12"))
 
 Base = declarative_base()
 engine = None
@@ -48,7 +43,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.now, nullable=False)
 
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
-    logs = relationship("SiemLog", back_populates="user")
+    logs = relationship("EdrLog", back_populates="user")
 
 
 class UserSession(Base):
@@ -63,8 +58,8 @@ class UserSession(Base):
     user = relationship("User", back_populates="sessions")
 
 
-class SiemLog(Base):
-    __tablename__ = "siem_logs"
+class EdrLog(Base):
+    __tablename__ = "edr_logs"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     source = Column(String(50), nullable=False)
@@ -75,22 +70,9 @@ class SiemLog(Base):
     user = relationship("User", back_populates="logs")
 
 
-def _server_url() -> URL:
-    return URL.create(
-        "mysql+pymysql",
-        username=DB_USER,
-        password=DB_PASSWORD or None,
-        host=DB_HOST,
-        port=DB_PORT,
-    )
-
-
 def _database_url() -> str:
-    password = quote_plus(DB_PASSWORD) if DB_PASSWORD else ""
-    auth_part = DB_USER
-    if password:
-        auth_part = f"{DB_USER}:{password}"
-    return f"mysql+pymysql://{auth_part}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{DB_PATH.as_posix()}"
 
 
 def _write_fallback(source: str, message: str, username: str | None = None):
@@ -119,14 +101,6 @@ def verify_password(password: str, salt: str, expected_hash: str) -> bool:
     return hmac.compare_digest(_hash_password(password, salt), expected_hash)
 
 
-def _ensure_database_exists():
-    bootstrap_engine = create_engine(_server_url(), pool_pre_ping=True)
-    with bootstrap_engine.connect() as connection:
-        connection.execute(text(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
-        connection.commit()
-    bootstrap_engine.dispose()
-
-
 def _seed_default_admin():
     db = SessionLocal()
     try:
@@ -150,8 +124,12 @@ def _seed_default_admin():
 def init_db():
     global DB_ENABLED, engine, SessionLocal
     try:
-        _ensure_database_exists()
-        engine = create_engine(_database_url(), pool_pre_ping=True)
+        DB_ENABLED = True
+        engine = create_engine(
+            _database_url(),
+            connect_args={"check_same_thread": False},
+            pool_pre_ping=True,
+        )
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         Base.metadata.create_all(bind=engine)
         _seed_default_admin()
@@ -159,7 +137,7 @@ def init_db():
         DB_ENABLED = False
         engine = None
         SessionLocal = None
-        print(f"[DB WARNING] MySQL disabled, falling back to file logging: {exc}")
+        print(f"[DB WARNING] SQLite disabled, falling back to file logging: {exc}")
 
 
 def is_db_enabled() -> bool:
@@ -280,11 +258,11 @@ def save_log(source: str, message: str, username: str | None = None):
 
     db = SessionLocal()
     try:
-        db.add(SiemLog(source=source, message=message, username=username))
+        db.add(EdrLog(source=source, message=message, username=username))
         db.commit()
     except Exception as exc:
         db.rollback()
-        print(f"[DB WARNING] MySQL write failed, using fallback log: {exc}")
+        print(f"[DB WARNING] SQLite write failed, using fallback log: {exc}")
         _write_fallback(source, message, username)
     finally:
         db.close()
@@ -298,8 +276,8 @@ def get_log_dates_for_user(valid_sources: set[str], username: str) -> dict[str, 
     db = SessionLocal()
     try:
         rows = (
-            db.query(SiemLog.source, SiemLog.timestamp)
-            .filter(SiemLog.username == username)
+            db.query(EdrLog.source, EdrLog.timestamp)
+            .filter(EdrLog.username == username)
             .all()
         )
         for source, timestamp in rows:
@@ -323,10 +301,10 @@ def get_db_log_content(source: str, date: str, username: str) -> str:
     db = SessionLocal()
     try:
         rows = (
-            db.query(SiemLog)
-            .filter(SiemLog.source == source)
-            .filter(SiemLog.username == username)
-            .order_by(SiemLog.timestamp.asc())
+            db.query(EdrLog)
+            .filter(EdrLog.source == source)
+            .filter(EdrLog.username == username)
+            .order_by(EdrLog.timestamp.asc())
             .all()
         )
     finally:
@@ -348,8 +326,8 @@ def delete_logs_for_user(username: str) -> int:
     db = SessionLocal()
     try:
         deleted_count = (
-            db.query(SiemLog)
-            .filter(SiemLog.username == username)
+            db.query(EdrLog)
+            .filter(EdrLog.username == username)
             .delete(synchronize_session=False)
         )
         db.commit()
@@ -368,9 +346,9 @@ def delete_logs_for_user_on_date(username: str, source: str, date: str) -> int:
     db = SessionLocal()
     try:
         rows = (
-            db.query(SiemLog.id, SiemLog.timestamp)
-            .filter(SiemLog.username == username)
-            .filter(SiemLog.source == source)
+            db.query(EdrLog.id, EdrLog.timestamp)
+            .filter(EdrLog.username == username)
+            .filter(EdrLog.source == source)
             .all()
         )
         ids_to_delete = [
@@ -382,8 +360,8 @@ def delete_logs_for_user_on_date(username: str, source: str, date: str) -> int:
             return 0
 
         deleted_count = (
-            db.query(SiemLog)
-            .filter(SiemLog.id.in_(ids_to_delete))
+            db.query(EdrLog)
+            .filter(EdrLog.id.in_(ids_to_delete))
             .delete(synchronize_session=False)
         )
         db.commit()

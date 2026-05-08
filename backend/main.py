@@ -64,7 +64,18 @@ except ModuleNotFoundError:
 
 PROJECT_ROOT = app_root()
 BUNDLE_ROOT = bundle_root()
-RULES_PATH = str(BUNDLE_ROOT / "backend" / "rules" / "enhanced_rules.yar")
+LOCAL_RULES_PATH = os.getenv(
+    "YARA_LOCAL_RULES_PATH",
+    str(BUNDLE_ROOT / "backend" / "rules" / "enhanced_rules.yar"),
+)
+EXTERNAL_RULES_PATH = os.getenv(
+    "YARA_EXTERNAL_RULES_PATH",
+    os.getenv("YARA_RULES_PATH", str(BUNDLE_ROOT / "backend" / "rules" / "external" / "yara-rules")),
+)
+YARA_RULE_SOURCE_LABELS = {
+    "local": "local-critical",
+    "external": "external-extended",
+}
 DEFAULT_WAZUH_ALERT_LOG = str(PROJECT_ROOT / "logs" / "wazuh_alerts.jsonl")
 DEFAULT_TEST_ARTIFACT_DIR = str(PROJECT_ROOT / "logs" / "test_artifacts")
 FRONTEND_DIR = BUNDLE_ROOT / "frontend"
@@ -78,7 +89,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="SIEM API", lifespan=lifespan)
+app = FastAPI(title="EDR API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -102,7 +113,7 @@ TEST_ALERT_PRESETS = {
         "description": "Creates a harmless PowerShell-style persistence artifact and runs a safe marker script inside the project test folder.",
         "filename": "safe_persistence_probe.ps1",
         "content": (
-            "# Safe SIEM persistence simulation\n"
+            "# Safe EDR persistence simulation\n"
             "$encoded = 'VEVTVA=='\n"
             "$webClient = 'Net.WebClient'\n"
             "Write-Output 'Safe persistence probe only.'\n"
@@ -117,7 +128,7 @@ TEST_ALERT_PRESETS = {
         "description": "Creates a harmless fake macro-enabled document artifact for triage and alert testing. No code is executed.",
         "filename": "invoice_macro_dropper.docm",
         "content": (
-            "Safe SIEM test artifact.\n"
+            "Safe EDR test artifact.\n"
             "This is not a real Office macro document.\n"
             "It exists only to simulate a suspicious .docm file path.\n"
         ),
@@ -131,7 +142,7 @@ TEST_ALERT_PRESETS = {
         "description": "Creates a harmless shortcut-like artifact in the test folder to simulate persistence through startup entries. No code is executed.",
         "filename": "startup_update.lnk",
         "content": (
-            "Safe SIEM test artifact.\n"
+            "Safe EDR test artifact.\n"
             "This is not a real Windows shortcut.\n"
             "It only simulates a suspicious startup path for the dashboard.\n"
         ),
@@ -145,7 +156,7 @@ TEST_ALERT_PRESETS = {
         "description": "Creates a harmless JavaScript-like artifact that imitates a downloader script. No code is executed.",
         "filename": "browser_update_dropper.js",
         "content": (
-            "// Safe SIEM test artifact\n"
+            "// Safe EDR test artifact\n"
             "// No network activity, no execution, no payload.\n"
             "const pretendDownload = 'DownloadString';\n"
             "console.log('Safe script dropper simulation');\n"
@@ -570,15 +581,34 @@ def build_test_alert_payload(preset_id: str, file_path: str, username: str) -> d
     }
 
 
-def run_yara_verification(file_path: str, username: str | None = None):
-    broadcast_log("yara", f"[Yara VERIFY] Starting verification for: {file_path}", username)
-    result = scan_file_with_rules(RULES_PATH, file_path)
+def get_external_rules_path():
+    return EXTERNAL_RULES_PATH if os.path.exists(EXTERNAL_RULES_PATH) else None
+
+
+def select_yara_rules_path(prefer_external: bool):
+    if prefer_external:
+        external_rules_path = get_external_rules_path()
+        if external_rules_path:
+            return external_rules_path, "external"
+    return LOCAL_RULES_PATH, "local"
+
+
+def run_yara_verification(file_path: str, username: str | None = None, prefer_external: bool = True):
+    rules_path, rule_source = select_yara_rules_path(prefer_external)
+    rule_label = YARA_RULE_SOURCE_LABELS[rule_source]
+    if prefer_external and rule_source != "external":
+        broadcast_log("yara", "[Yara VERIFY] External extended rules are unavailable; falling back to local critical rules.", username)
+
+    broadcast_log("yara", f"[Yara VERIFY] Starting {rule_label} verification for: {file_path}", username)
+    result = scan_file_with_rules(rules_path, file_path)
+    result["rule_source"] = rule_label
+    result["rules_path"] = rules_path
 
     if result["status"] == "matched":
         match_names = ", ".join(result["matches"])
-        broadcast_log("yara", f"[Yara DETECT] Verification hit for {file_path} | Rules Matched: {match_names}", username)
+        broadcast_log("yara", f"[Yara DETECT] {rule_label} verification hit for {file_path} | Rules Matched: {match_names}", username)
     elif result["status"] == "clean":
-        broadcast_log("yara", f"[Yara VERIFY] No Yara rules matched for: {file_path}", username)
+        broadcast_log("yara", f"[Yara VERIFY] No {rule_label} Yara rules matched for: {file_path}", username)
     else:
         broadcast_log("yara", f"[Yara VERIFY] {result['message']}", username)
 
@@ -946,17 +976,31 @@ def start_yara(payload: dict | None = None, current_user: dict = Depends(require
             if isinstance(path, str) and path.strip()
         ]
 
+    if selected_paths:
+        rules_path, rule_source = select_yara_rules_path(prefer_external=True)
+        if rule_source != "external":
+            message = "External Yara rules are not installed. Run backend/rules/update_external_rules.ps1 first."
+            broadcast_log("yara", f"[Yara VERIFY] {message}", current_user["username"])
+            raise HTTPException(status_code=400, detail=message)
+    else:
+        if payload and payload.get("rule_source") == "external":
+            message = "External Yara rules cannot be used for an all-drive scan. Select one or more folders."
+            broadcast_log("yara", f"[Yara VERIFY] {message}", current_user["username"])
+            raise HTTPException(status_code=400, detail=message)
+        rules_path, rule_source = select_yara_rules_path(prefer_external=False)
+
     scan_scope = ", ".join(selected_paths) if selected_paths else "all detected drives"
-    broadcast_log("yara", f"[Yara VERIFY] Preparing Yara scan for: {scan_scope}", current_user["username"])
+    rule_label = YARA_RULE_SOURCE_LABELS[rule_source]
+    broadcast_log("yara", f"[Yara VERIFY] Preparing {rule_label} Yara scan for: {scan_scope}", current_user["username"])
     yara_thread = YaraScanner(
-        rules_path=RULES_PATH,
+        rules_path=rules_path,
         target_path=None,
         target_paths=selected_paths,
         callback=lambda msg: broadcast_log("yara", msg, current_user["username"]),
         on_finished=on_yara_finished,
     )
     yara_thread.start()
-    return {"status": "started"}
+    return {"status": "started", "rule_source": rule_label, "rules_path": rules_path}
 
 
 @app.post("/api/yara/stop")

@@ -1,5 +1,80 @@
-rule PE_Process_Injection_Toolmark { strings: $a1 = "VirtualAllocEx" ascii wide $a2 = "WriteProcessMemory" ascii wide $a3 = "CreateRemoteThread" ascii wide $a4 = "NtUnmapViewOfSection" ascii wide condition: uint16(0) == 0x5A4D and 3 of ($a*) }
-rule Generic_Ransomware_Note { strings: $r1 = "your files are encrypted" ascii wide nocase $r2 = "all your files have been encrypted" ascii wide nocase $r3 = "decryption key" ascii wide nocase $r4 = "restore your files" ascii wide nocase $r5 = "tor browser" ascii wide nocase $r6 = "bitcoin" ascii wide nocase condition: 4 of ($r*) }
-rule Credential_Dump_Toolmark { strings: $c1 = "lsass.dmp" ascii wide nocase $c2 = "MiniDumpWriteDump" ascii wide $c3 = "comsvcs.dll" ascii wide nocase $c4 = "procdump -ma lsass" ascii wide nocase condition: 2 of ($c*) }
-rule Suspicious_PowerShell_Loader { strings: $p1 = "powershell" ascii wide nocase $p2 = "-enc" ascii wide nocase $p3 = "FromBase64String" ascii wide nocase $p4 = "Invoke-Expression" ascii wide nocase $p5 = "Net.WebClient" ascii wide nocase $p6 = "DownloadString" ascii wide nocase condition: $p1 and 2 of ($p2,$p3,$p4,$p5,$p6) }
-rule Mock_Hacker_Testing { strings: $h1 = "HACKER_DETECTED" ascii wide condition: $h1 }
+rule Critical_ProcessInjection_Implant {
+    meta:
+        description = "Always-on critical PE process injection pattern"
+        tier = "local-critical"
+        severity = "critical"
+    strings:
+        $api1 = "VirtualAllocEx" ascii wide
+        $api2 = "WriteProcessMemory" ascii wide
+        $api3 = "CreateRemoteThread" ascii wide
+        $api4 = "NtUnmapViewOfSection" ascii wide
+        $api5 = "QueueUserAPC" ascii wide
+        $api6 = "SetThreadContext" ascii wide
+    condition:
+        uint16(0) == 0x5A4D and filesize < 25MB and 5 of ($api*)
+}
+
+rule Critical_Ransomware_Note {
+    meta:
+        description = "Always-on critical ransom note with encryption, recovery, anonymity, and payment markers"
+        tier = "local-critical"
+        severity = "critical"
+    strings:
+        $enc1 = "your files are encrypted" ascii wide nocase
+        $enc2 = "all your files have been encrypted" ascii wide nocase
+        $recover1 = "decryption key" ascii wide nocase
+        $recover2 = "restore your files" ascii wide nocase
+        $anon1 = "tor browser" ascii wide nocase
+        $anon2 = ".onion" ascii wide nocase
+        $pay1 = "bitcoin" ascii wide nocase
+        $pay2 = "monero" ascii wide nocase
+    condition:
+        filesize < 2MB and
+        any of ($enc*) and
+        any of ($recover*) and
+        any of ($anon*) and
+        any of ($pay*)
+}
+
+rule Critical_Mimikatz_Credential_Dumper {
+    meta:
+        description = "Always-on critical Mimikatz-style credential dumping markers"
+        tier = "local-critical"
+        severity = "critical"
+    strings:
+        $m1 = "sekurlsa::logonpasswords" ascii wide nocase
+        $m2 = "mimikatz" ascii wide nocase
+        $m3 = "privilege::debug" ascii wide nocase
+        $m4 = "lsadump::sam" ascii wide nocase
+        $api1 = "MiniDumpWriteDump" ascii wide
+        $target1 = "lsass.exe" ascii wide nocase
+    condition:
+        (uint16(0) == 0x5A4D and filesize < 50MB and 2 of ($m*)) or
+        (uint16(0) == 0x5A4D and filesize < 50MB and $api1 and $target1 and any of ($m*))
+}
+
+rule Critical_PowerShell_Download_Cradle {
+    meta:
+        description = "Always-on critical encoded PowerShell download cradle with execution"
+        tier = "local-critical"
+        severity = "critical"
+    strings:
+        $ps = "powershell" ascii wide nocase
+        $enc1 = "-enc" ascii wide nocase
+        $enc2 = "-encodedcommand" ascii wide nocase
+        $decode = "FromBase64String" ascii wide nocase
+        $exec1 = "Invoke-Expression" ascii wide nocase
+        $exec2 = "IEX" ascii wide
+        $web1 = "Net.WebClient" ascii wide nocase
+        $web2 = "DownloadString" ascii wide nocase
+        $web3 = "DownloadFile" ascii wide nocase
+        $url1 = "http://" ascii wide nocase
+        $url2 = "https://" ascii wide nocase
+    condition:
+        filesize < 5MB and
+        $ps and
+        any of ($enc*) and
+        ($decode or any of ($exec*)) and
+        any of ($web*) and
+        any of ($url*)
+}

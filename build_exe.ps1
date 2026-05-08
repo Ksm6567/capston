@@ -9,7 +9,7 @@ if (-not (Test-Path $python)) {
 & $python -m PyInstaller `
   --noconfirm `
   --clean `
-  --name capstone-siem `
+  --name capstone-edr `
   --onedir `
   --windowed `
   --add-data "frontend;frontend" `

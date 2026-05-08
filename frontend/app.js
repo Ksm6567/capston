@@ -3,10 +3,10 @@ const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${wind
 
 let ws;
 let authMode = 'login';
-let authToken = localStorage.getItem('siemSessionToken') || '';
-let currentUsername = localStorage.getItem('siemUsername') || '';
-let currentUserIsAdmin = localStorage.getItem('siemIsAdmin') === 'true';
-let logViewerUsername = localStorage.getItem('siemLogViewerUsername') || currentUsername;
+let authToken = localStorage.getItem('edrSessionToken') || '';
+let currentUsername = localStorage.getItem('edrUsername') || '';
+let currentUserIsAdmin = localStorage.getItem('edrIsAdmin') === 'true';
+let logViewerUsername = localStorage.getItem('edrLogViewerUsername') || currentUsername;
 let isWazuhRunning = false;
 let isYaraRunning = false;
 let responseDashboardActive = false;
@@ -190,10 +190,10 @@ async function submitAuth() {
         currentUsername = data.user.username;
         currentUserIsAdmin = Boolean(data.user.is_admin);
         logViewerUsername = currentUsername;
-        localStorage.setItem('siemSessionToken', authToken);
-        localStorage.setItem('siemUsername', currentUsername);
-        localStorage.setItem('siemIsAdmin', String(currentUserIsAdmin));
-        localStorage.setItem('siemLogViewerUsername', logViewerUsername);
+        localStorage.setItem('edrSessionToken', authToken);
+        localStorage.setItem('edrUsername', currentUsername);
+        localStorage.setItem('edrIsAdmin', String(currentUserIsAdmin));
+        localStorage.setItem('edrLogViewerUsername', logViewerUsername);
         authPasswordInput.value = '';
         applyAuthenticatedState();
     } catch (error) {
@@ -223,10 +223,10 @@ function forceLogout(message) {
     currentUsername = '';
     currentUserIsAdmin = false;
     logViewerUsername = '';
-    localStorage.removeItem('siemSessionToken');
-    localStorage.removeItem('siemUsername');
-    localStorage.removeItem('siemIsAdmin');
-    localStorage.removeItem('siemLogViewerUsername');
+    localStorage.removeItem('edrSessionToken');
+    localStorage.removeItem('edrUsername');
+    localStorage.removeItem('edrIsAdmin');
+    localStorage.removeItem('edrLogViewerUsername');
     authShell.classList.remove('app-hidden');
     appShell.classList.add('app-hidden');
     wsStatus.textContent = 'Disconnected';
@@ -255,9 +255,9 @@ async function restoreSession() {
         currentUsername = data.user.username;
         currentUserIsAdmin = Boolean(data.user.is_admin);
         logViewerUsername = currentUsername;
-        localStorage.setItem('siemUsername', currentUsername);
-        localStorage.setItem('siemIsAdmin', String(currentUserIsAdmin));
-        localStorage.setItem('siemLogViewerUsername', logViewerUsername);
+        localStorage.setItem('edrUsername', currentUsername);
+        localStorage.setItem('edrIsAdmin', String(currentUserIsAdmin));
+        localStorage.setItem('edrLogViewerUsername', logViewerUsername);
         applyAuthenticatedState();
     } catch (error) {
         forceLogout('Please sign in again.');
@@ -345,7 +345,7 @@ async function toggleWazuh() {
     }
 }
 
-async function toggleYara() {
+async function toggleYaraMonitor() {
     if (isYaraRunning) {
         try {
             await fetchAuthed('/api/yara/stop', { method: 'POST' });
@@ -356,7 +356,19 @@ async function toggleYara() {
         return;
     }
 
-    openYaraDirectoryModal();
+    try {
+        const res = await fetchAuthed('/api/yara/start', {
+            method: 'POST',
+            body: JSON.stringify({ mode: 'always_on', rule_source: 'local' }),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || 'Failed to start YARA monitor.');
+        }
+        updateYaraUI(true);
+    } catch (e) {
+        alert(e.message || 'Backend server is not responding. Check whether the Python server is running.');
+    }
 }
 
 function updateTestAlertPresetDetails() {
@@ -449,12 +461,17 @@ function updateWazuhUI(isRunning) {
 
 function updateYaraUI(isRunning) {
     isYaraRunning = isRunning;
-    const btn = document.getElementById('btn-yara');
-    btn.classList.toggle('active-yara', isRunning);
-    btn.querySelector('.nav-btn-title').textContent = 'YARA';
-    btn.querySelector('.nav-btn-copy').textContent = isRunning
-        ? 'Scan monitoring active. Press F2 to stop YARA.'
-        : 'Rule scan results and folder targets. Press F2 to start.';
+    const monitorButton = document.getElementById('btn-yara-monitor');
+    const scanButton = document.getElementById('btn-yara-scan');
+    monitorButton.classList.toggle('active-yara', isRunning);
+    monitorButton.querySelector('.nav-btn-title').textContent = isRunning ? 'Stop YARA' : 'YARA Monitor';
+    monitorButton.querySelector('.nav-btn-copy').textContent = isRunning
+        ? 'Monitoring active. Press F2 to stop.'
+        : 'Local critical rules for always-on scanning. Press F2 to start.';
+    scanButton.disabled = isRunning;
+    scanButton.querySelector('.nav-btn-copy').textContent = isRunning
+        ? 'Stop the current YARA scan before deep scanning.'
+        : 'External rules for selected folders. Press F4 to open.';
 }
 
 function scheduleIncidentRefresh() {
@@ -613,7 +630,7 @@ function updateYaraSelectionState() {
         return;
     }
 
-    yaraDirectoryStatus.textContent = 'Initial scan and later change monitoring will run only on the selected folders.';
+    yaraDirectoryStatus.textContent = 'External rules will scan only the selected folders.';
     yaraSelectedSummary.textContent = `${selected.length} selected: ${selected.slice(0, 3).join(', ')}${selected.length > 3 ? ' ...' : ''}`;
 }
 
@@ -627,14 +644,18 @@ async function startSelectedYaraScan() {
     startSelectedYaraButton.disabled = true;
 
     try {
-        await fetchAuthed('/api/yara/start', {
+        const res = await fetchAuthed('/api/yara/start', {
             method: 'POST',
-            body: JSON.stringify({ target_paths: targetPaths }),
+            body: JSON.stringify({ target_paths: targetPaths, rule_source: 'external' }),
         });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || 'Failed to start the selected Yara scan.');
+        }
         updateYaraUI(true);
         closeYaraDirectoryModal();
     } catch (e) {
-        yaraDirectoryStatus.textContent = 'Failed to start the selected Yara scan.';
+        yaraDirectoryStatus.textContent = e.message || 'Failed to start the selected Yara scan.';
     } finally {
         startSelectedYaraButton.disabled = false;
     }
@@ -857,7 +878,7 @@ async function loadAdminLogUsers() {
             logViewerUsername = currentUsername;
         }
         logUserSelect.value = logViewerUsername || currentUsername;
-        localStorage.setItem('siemLogViewerUsername', logViewerUsername || currentUsername);
+        localStorage.setItem('edrLogViewerUsername', logViewerUsername || currentUsername);
         setLogClearMode(logClearModeArmed);
     } catch (error) {
         logUserSelect.innerHTML = '<option value="">Failed to load users</option>';
@@ -870,7 +891,7 @@ async function changeLogViewerUser() {
     }
 
     logViewerUsername = logUserSelect.value || currentUsername;
-    localStorage.setItem('siemLogViewerUsername', logViewerUsername);
+    localStorage.setItem('edrLogViewerUsername', logViewerUsername);
     setLogClearMode(logClearModeArmed);
     try {
         await refreshLogViewerData({
@@ -1140,11 +1161,17 @@ document.addEventListener('keydown', (e) => {
     }
     if (e.key === 'F2') {
         e.preventDefault();
-        toggleYara();
+        toggleYaraMonitor();
     }
     if (e.key === 'F3') {
         e.preventDefault();
         openLogViewer();
+    }
+    if (e.key === 'F4') {
+        e.preventDefault();
+        if (!isYaraRunning) {
+            openYaraDirectoryModal();
+        }
     }
 });
 

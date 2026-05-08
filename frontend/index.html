@@ -2,16 +2,16 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Wazuh-Yara SIEM Dashboard</title>
+    <title>Wazuh-YARA EDR Console</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="auth-shell" class="auth-shell">
         <section class="auth-panel">
             <div class="auth-copy">
-                <p class="eyebrow">Central SIEM Server</p>
-                <h1>siem</h1>
-                <p>This dashboard uses this computer as the main SIEM server. Sign in to view user-specific activity history and response logs.</p>
+                <p class="eyebrow">Endpoint Detection Console</p>
+                <h1>edr</h1>
+                <p>This console uses this computer as a local endpoint detection workspace. Sign in to review threat activity, response decisions, and detection history.</p>
             </div>
             <div class="auth-card">
                 <div class="auth-tabs">
@@ -31,9 +31,9 @@
     <div id="app-shell" class="app-shell app-hidden">
         <aside class="sidebar">
             <div class="sidebar-brand">
-                <p class="eyebrow">Threat Monitoring System</p>
+                <p class="eyebrow">Endpoint Threat Response</p>
                 <h1>Dashboard</h1>
-                <p class="sidebar-copy">Wazuh, YARA, response actions, and historical logs in one command surface.</p>
+                <p class="sidebar-copy">Wazuh events, YARA verification, response actions, and detection history in one command surface.</p>
             </div>
 
             <div class="controls">
@@ -41,9 +41,13 @@
                     <span class="nav-btn-title">Wazuh</span>
                     <span class="nav-btn-copy">Live event stream and detection feed</span>
                 </button>
-                <button id="btn-yara" class="btn nav-btn" onclick="toggleYara()">
-                    <span class="nav-btn-title">YARA</span>
-                    <span class="nav-btn-copy">Rule scan results and folder targets</span>
+                <button id="btn-yara-monitor" class="btn nav-btn" onclick="toggleYaraMonitor()">
+                    <span class="nav-btn-title">YARA Monitor</span>
+                    <span class="nav-btn-copy">Local critical rules for always-on scanning</span>
+                </button>
+                <button id="btn-yara-scan" class="btn nav-btn" onclick="openYaraDirectoryModal()">
+                    <span class="nav-btn-title">YARA Deep Scan</span>
+                    <span class="nav-btn-copy">External rules for selected folders</span>
                 </button>
                 <button id="btn-response" class="btn nav-btn" onclick="toggleResponseDashboard()">
                     <span class="nav-btn-title">Response</span>
@@ -110,8 +114,8 @@
     <div id="yara-modal" class="modal">
         <div class="modal-content modal-content-wide">
             <span class="close" onclick="closeYaraDirectoryModal()">&times;</span>
-            <h2>Select Folders For Yara Scan</h2>
-            <p class="modal-copy">Press F2 to open this panel, choose the folders you want to scan, and start Yara only on those targets. After the initial scan finishes, change monitoring will continue for the selected folders.</p>
+            <h2>Select Folders For Yara Deep Scan</h2>
+            <p class="modal-copy">Choose the folders you want to scan with the external rule set. After the initial scan finishes, change monitoring will continue for the selected folders.</p>
             <div id="yara-directory-status" class="directory-status">Loading directories...</div>
             <div id="yara-selected-summary" class="selected-summary">No folders selected.</div>
             <div id="yara-directory-list" class="directory-list"></div>

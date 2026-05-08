@@ -4,7 +4,8 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+*.sqlite
 *.sqlite-journal
+data/
 *_out.txt
 test_output.txt
-installer/output/

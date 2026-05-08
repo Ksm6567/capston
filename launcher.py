@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     if wait_for_server(HOST, PORT):
         window = webview.create_window(
-            "Capstone SIEM",
+            "Capstone EDR",
             APP_URL,
             width=1440,
             height=920,

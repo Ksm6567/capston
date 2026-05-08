@@ -250,6 +250,11 @@ select {
     background: transparent;
 }
 
+.btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
 .btn.danger {
     color: #ff9b9b;
     border-color: #7f3e46;
