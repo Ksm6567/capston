@@ -1,3 +1,29 @@
+rule Capstone_Safe_Yara_Test_Incident {
+    meta:
+        description = "Safe Capstone EDR test marker for incident workflow validation"
+        tier = "local-critical"
+        severity = "critical"
+        safe_test = "true"
+    strings:
+        $marker = "CAPSTONE_EDR_SAFE_YARA_TEST_INCIDENT" ascii wide
+    condition:
+        filesize < 64KB and $marker
+}
+
+rule Capstone_Safe_IP_Block_Test_Script {
+    meta:
+        description = "Safe Capstone EDR IP block workflow test script marker"
+        tier = "local-critical"
+        severity = "high"
+        safe_test = "true"
+    strings:
+        $marker = "CAPSTONE_SAFE_IP_BLOCK_TEST" ascii wide
+        $label = "[Capstone IP Block Test]" ascii wide
+        $tcp = "System.Net.Sockets.TcpClient" ascii wide
+    condition:
+        filesize < 64KB and $marker and $label and $tcp
+}
+
 rule Critical_ProcessInjection_Implant {
     meta:
         description = "Always-on critical PE process injection pattern"

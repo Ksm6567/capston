@@ -1,0 +1,3 @@
+Capstone EDR safe YARA engine test file.
+This file is harmless and contains only a marker for a local test rule.
+CAPSTONE_EDR_SAFE_YARA_TEST_INCIDENT

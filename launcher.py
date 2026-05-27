@@ -13,6 +13,25 @@ PORT = 8000
 APP_URL = f"http://{HOST}:{PORT}/"
 
 
+class DesktopApi:
+    def __init__(self) -> None:
+        self._window = None
+
+    def choose_scan_folder(self):
+        if not self._window:
+            return None
+
+        selected_paths = self._window.create_file_dialog(
+            webview.FileDialog.FOLDER,
+            allow_multiple=False,       
+        )
+        if not selected_paths:
+            return None
+        if isinstance(selected_paths, (list, tuple)):
+            return selected_paths[0] if selected_paths else None
+        return selected_paths
+
+
 def wait_for_server(host: str, port: int, timeout: float = 15.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -33,11 +52,14 @@ if __name__ == "__main__":
     server_thread.start()
 
     if wait_for_server(HOST, PORT):
+        desktop_api = DesktopApi()
         window = webview.create_window(
             "Capstone EDR",
             APP_URL,
+            js_api=desktop_api,
             width=1440,
             height=920,
             min_size=(1100, 720),
         )
+        desktop_api._window = window
         webview.start()

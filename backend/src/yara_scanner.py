@@ -1,5 +1,7 @@
+import hashlib
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from threading import Lock, Thread
 
@@ -11,6 +13,7 @@ _RULE_CACHE_LOCK = Lock()
 
 
 class YaraScanner(Thread):
+    RULE_BATCH_SIZE = 64
     TARGET_EXTENSIONS = {
         ".exe", ".dll", ".sys", ".scr", ".msi", ".bat", ".cmd", ".ps1", ".psm1",
         ".vbs", ".js", ".jse", ".hta", ".jar", ".lnk", ".docm", ".xlsm", ".pptm",
@@ -18,7 +21,7 @@ class YaraScanner(Thread):
     }
     IGNORED_DIR_NAMES = {
         ".git", ".gemini", "__pycache__", "node_modules", "venv", "logs", "$recycle.bin",
-        "system volume information", "winsxs", "temp", "tmp",
+        "quarantine", "system volume information", "winsxs", "temp", "tmp",
     }
     IGNORED_FILE_NAMES = {
         "eve.json", "out.txt", "ws_out.txt", "test_output.txt",
@@ -27,7 +30,15 @@ class YaraScanner(Thread):
     MAX_FILE_SIZE = 50 * 1024 * 1024
     POLL_INTERVAL = 10
 
-    def __init__(self, rules_path="rules/enhanced_rules.yar", target_path=None, target_paths=None, callback=None, on_finished=None):
+    def __init__(
+        self,
+        rules_path="rules/enhanced_rules.yar",
+        target_path=None,
+        target_paths=None,
+        callback=None,
+        on_finished=None,
+        monitor_after_initial=True,
+    ):
         super().__init__()
         self.daemon = True
         self.rules_path = rules_path
@@ -37,10 +48,14 @@ class YaraScanner(Thread):
         self.callback = callback
         self.on_finished = on_finished
         self.file_state = {}
+        self.monitor_after_initial = monitor_after_initial
 
-    def emit(self, message):
+    def emit(self, message, details=None):
         if self.callback:
-            self.callback(message)
+            try:
+                self.callback(message, details)
+            except TypeError:
+                self.callback(message)
 
     def get_scan_roots(self):
         if self.target_paths:
@@ -118,6 +133,61 @@ class YaraScanner(Thread):
         stat = source_path.stat()
         return ((str(source_path), stat.st_mtime_ns, stat.st_size),)
 
+    def get_rule_files(self, source_path):
+        return sorted(
+            path for path in source_path.rglob("*")
+            if path.is_file() and self.is_rule_file(path)
+        )
+
+    def build_rule_namespace(self, index, rule_file):
+        safe_name = "".join(
+            char if char.isalnum() or char == "_" else "_"
+            for char in rule_file.stem
+        )
+        return f"rule_{index:04d}_{safe_name[:48]}"
+
+    def compile_rule_batch(self, indexed_rule_files, skipped_rules):
+        filepaths = {
+            self.build_rule_namespace(index, rule_file): str(rule_file)
+            for index, rule_file in indexed_rule_files
+        }
+        try:
+            return [yara.compile(filepaths=filepaths)]
+        except Exception as exc:
+            if len(indexed_rule_files) == 1:
+                _, rule_file = indexed_rule_files[0]
+                error = str(exc).strip() or exc.__class__.__name__
+                skipped_rules.append((rule_file, error))
+                return []
+
+            midpoint = len(indexed_rule_files) // 2
+            return (
+                self.compile_rule_batch(indexed_rule_files[:midpoint], skipped_rules) +
+                self.compile_rule_batch(indexed_rule_files[midpoint:], skipped_rules)
+            )
+
+    def compile_directory_rules(self, source_path):
+        rule_files = self.get_rule_files(source_path)
+        compiled_rules = []
+        skipped_rules = []
+        indexed_rule_files = list(enumerate(rule_files))
+
+        for start in range(0, len(indexed_rule_files), self.RULE_BATCH_SIZE):
+            batch = indexed_rule_files[start:start + self.RULE_BATCH_SIZE]
+            compiled_rules.extend(self.compile_rule_batch(batch, skipped_rules))
+
+        if skipped_rules:
+            examples = "; ".join(
+                f"{rule_file.name}: {error}"
+                for rule_file, error in skipped_rules[:3]
+            )
+            suffix = "" if len(skipped_rules) <= 3 else f"; +{len(skipped_rules) - 3} more"
+            self.emit(
+                f"[Yara VERIFY] Ignored {len(skipped_rules)} incompatible Yara rule file(s): {examples}{suffix}"
+            )
+
+        return compiled_rules
+
     def compile_rule_sources(self):
         source_path = Path(self.rules_path)
         signature = self.rule_source_signature(source_path)
@@ -128,27 +198,18 @@ class YaraScanner(Thread):
             if cached_rules is not None:
                 return cached_rules
 
-        if source_path.is_dir():
-            compiled_rules = []
-            rule_files = sorted(
-                path for path in source_path.rglob("*")
-                if path.is_file() and self.is_rule_file(path)
-            )
-            for rule_file in rule_files:
-                try:
-                    compiled_rules.append(yara.compile(filepath=str(rule_file)))
-                except Exception as exc:
-                    self.emit(f"[Yara VERIFY] Skipped invalid rule file {rule_file}: {exc}")
-            if not compiled_rules:
-                raise ValueError(f"No valid Yara rule files found in {source_path}")
-        else:
-            compiled_rules = [yara.compile(filepath=self.rules_path)]
-
-        with _RULE_CACHE_LOCK:
             resolved_source = str(source_path.resolve())
             for existing_key in list(_RULE_CACHE):
                 if existing_key[0] == resolved_source:
                     _RULE_CACHE.pop(existing_key, None)
+
+            if source_path.is_dir():
+                compiled_rules = self.compile_directory_rules(source_path)
+                if not compiled_rules:
+                    raise ValueError(f"No valid Yara rule files found in {source_path}")
+            else:
+                compiled_rules = [yara.compile(filepath=self.rules_path)]
+
             _RULE_CACHE[cache_key] = compiled_rules
         return compiled_rules
 
@@ -157,6 +218,36 @@ class YaraScanner(Thread):
         for rules in compiled_rules:
             matches.extend(rules.match(file_path))
         return matches
+
+    def calculate_sha256(self, file_path):
+        digest = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as file_handle:
+                for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return None
+
+    def build_match_details(self, file_path, stat, matches):
+        return {
+            "kind": "yara_match",
+            "file_path": file_path,
+            "file_name": os.path.basename(file_path),
+            "file_size": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            "sha256": self.calculate_sha256(file_path),
+            "rules_path": self.rules_path,
+            "matches": [
+                {
+                    "rule": match.rule,
+                    "namespace": getattr(match, "namespace", None),
+                    "tags": list(getattr(match, "tags", []) or []),
+                    "meta": dict(getattr(match, "meta", {}) or {}),
+                }
+                for match in matches
+            ],
+        }
 
     def scan_files(self, compiled_rules, roots, only_changed):
         matched = 0
@@ -186,7 +277,8 @@ class YaraScanner(Thread):
             if matches:
                 matched += 1
                 match_names = ", ".join(match.rule for match in matches)
-                self.emit(f"[Yara DETECT] File: {file_path} | Rules Matched: {match_names}")
+                details = self.build_match_details(file_path, stat, matches)
+                self.emit(f"[Yara DETECT] File: {file_path} | Rules Matched: {match_names}", details)
 
         stale_paths = [path for path in self.file_state if path not in seen]
         for stale_path in stale_paths:
@@ -217,6 +309,13 @@ class YaraScanner(Thread):
         self.emit(f"Starting initial Yara scan on: {root_summary}")
         scanned, matched = self.scan_files(compiled_rules, roots, only_changed=False)
         self.emit(f"Initial Yara scan complete. Scanned {scanned} files, matched {matched} files.")
+
+        if not self.monitor_after_initial:
+            if self.on_finished:
+                self.on_finished()
+            self._is_running = False
+            return
+
         self.emit("Initial Yara scan finished. Continuing to monitor selected folders for file changes.")
 
         while self._is_running:

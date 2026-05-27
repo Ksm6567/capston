@@ -1,177 +1,599 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>Wazuh-YARA EDR Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EDR 통합 보안 대시보드</title>
+    <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="auth-shell" class="auth-shell">
-        <section class="auth-panel">
-            <div class="auth-copy">
-                <p class="eyebrow">Endpoint Detection Console</p>
-                <h1>edr</h1>
-                <p>This console uses this computer as a local endpoint detection workspace. Sign in to review threat activity, response decisions, and detection history.</p>
+
+<!-- ═══════════════════ AUTH SHELL ═══════════════════ -->
+<div id="auth-shell" class="auth-shell">
+    <div class="auth-card">
+        <div class="auth-brand">
+            <div class="auth-logo">EDR</div>
+            <h1>EDR 통합 보안 콘솔</h1>
+            <p>엔드포인트 위협 탐지 및 대응 시스템에 로그인하세요.</p>
+        </div>
+        <div class="auth-tabs">
+            <button id="tab-login" class="auth-tab active" type="button" onclick="switchAuthMode('login')">로그인</button>
+            <button id="tab-register" class="auth-tab" type="button" onclick="switchAuthMode('register')">회원가입</button>
+        </div>
+        <div id="auth-feedback" class="auth-feedback">기본 관리자 계정: admin / admin1234</div>
+        <label class="auth-label" for="auth-username">아이디</label>
+        <input id="auth-username" class="auth-input" type="text" autocomplete="username" placeholder="아이디를 입력하세요">
+        <label class="auth-label" for="auth-password">비밀번호</label>
+        <input id="auth-password" class="auth-input" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요">
+        <button id="auth-submit" class="auth-submit" type="button" onclick="submitAuth()">로그인</button>
+    </div>
+</div>
+
+<!-- ═══════════════════ APP SHELL ═══════════════════ -->
+<div id="app-shell" class="app-shell app-hidden">
+
+    <!-- ━━━━━━ SIDEBAR ━━━━━━ -->
+    <aside class="sidebar">
+        <div class="sb-brand">
+            <div class="sb-logo">EDR</div>
+            <div class="sb-brand-text"><div class="sb-brand-title">통합 보안 대시보드</div></div>
+        </div>
+
+        <nav class="sb-nav">
+            <button class="sb-nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
+                <span class="sb-ic">▦</span><span>대시보드</span>
+            </button>
+            <button class="sb-nav-item" data-view="timeline" onclick="switchView('timeline')">
+                <span class="sb-ic">≡</span><span>이벤트 타임라인</span>
+            </button>
+            <button class="sb-nav-item" data-view="realtime" onclick="switchView('realtime')">
+                <span class="sb-ic">◉</span><span>실시간 탐지</span>
+                <span id="sb-realtime-dot" class="sb-live-dot"></span>
+            </button>
+            <button class="sb-nav-item" data-view="analysis" onclick="switchView('analysis')">
+                <span class="sb-ic">▲</span><span>분석 결과</span>
+            </button>
+            <button class="sb-nav-item" data-view="threats" onclick="switchView('threats')">
+                <span class="sb-ic">!</span><span>위협 탐지</span>
+                <span id="sb-threats-badge" class="sb-num-badge zero">0</span>
+            </button>
+            <button class="sb-nav-item" data-view="reports" onclick="switchView('reports')">
+                <span class="sb-ic">▤</span><span>보고서</span>
+            </button>
+            <button class="sb-nav-item" data-view="settings" onclick="switchView('settings')">
+                <span class="sb-ic">⚙</span><span>설정</span>
+            </button>
+        </nav>
+
+        <div class="sb-status">
+            <div class="sb-status-label">에이전트 상태</div>
+            <div id="agent-status" class="sb-status-value bad">중지됨</div>
+            <div id="agent-status-sub" class="sb-status-sub">엔진 0/2 실행 중</div>
+        </div>
+
+        <div class="sb-user">
+            <div class="sb-user-avatar">A</div>
+            <div class="sb-user-info">
+                <div id="user-chip" class="sb-user-name">ADMIN</div>
+                <div id="user-role" class="sb-user-role">관리자</div>
             </div>
-            <div class="auth-card">
-                <div class="auth-tabs">
-                    <button id="tab-login" class="btn auth-tab active" type="button" onclick="switchAuthMode('login')">Login</button>
-                    <button id="tab-register" class="btn auth-tab" type="button" onclick="switchAuthMode('register')">Register</button>
+            <button class="sb-logout" type="button" onclick="logout()" title="로그아웃">⎋</button>
+        </div>
+    </aside>
+
+    <!-- ━━━━━━ MAIN ━━━━━━ -->
+    <main class="main">
+
+        <header class="topbar">
+            <div>
+                <h1 id="topbar-title">EDR 통합 보안 대시보드</h1>
+                <p id="topbar-section-label" class="topbar-sub">시스템 전체 보안 상태를 주요 KPI로 요약합니다.</p>
+            </div>
+            <div class="topbar-right">
+                <div class="ws-status">
+                    <span id="ws-status" class="ws-dot offline"></span>
+                    <span id="ws-status-text">연결 안 됨</span>
                 </div>
-                <div id="auth-feedback" class="auth-feedback">Default admin account: admin / admin1234</div>
-                <label class="auth-label" for="auth-username">Username</label>
-                <input id="auth-username" class="auth-input" type="text" autocomplete="username" placeholder="Enter username">
-                <label class="auth-label" for="auth-password">Password</label>
-                <input id="auth-password" class="auth-input" type="password" autocomplete="current-password" placeholder="Enter password">
-                <button id="auth-submit" class="btn auth-submit" type="button" onclick="submitAuth()">Sign In</button>
+                <div class="notif-wrap">
+                    <button class="icon-btn" id="notif-btn" title="알림" onclick="toggleNotifPanel()">
+                        <span>🔔</span>
+                        <span id="notif-badge" class="icon-badge hidden">0</span>
+                    </button>
+                    <!-- 알림 패널 -->
+                    <div id="notif-panel" class="notif-panel">
+                        <div class="notif-head">
+                            <div>
+                                <h4>중요 알림</h4>
+                                <p id="notif-subhead">최근 24시간 · 0건</p>
+                            </div>
+                            <div class="notif-head-actions">
+                                <button class="notif-mini-btn" onclick="markAllRead()">모두 읽음</button>
+                                <button class="notif-mini-btn" onclick="clearNotifications()">전체 지우기</button>
+                            </div>
+                        </div>
+                        <div class="notif-filter">
+                            <button class="notif-filter-chip active" data-nfilter="all" onclick="filterNotif('all', this)">전체</button>
+                            <button class="notif-filter-chip" data-nfilter="high" onclick="filterNotif('high', this)">긴급</button>
+                            <button class="notif-filter-chip" data-nfilter="medium" onclick="filterNotif('medium', this)">경고</button>
+                            <button class="notif-filter-chip" data-nfilter="unread" onclick="filterNotif('unread', this)">안 읽음</button>
+                        </div>
+                        <ul id="notif-list" class="notif-list">
+                            <li class="notif-empty">아직 중요 알림이 없습니다.</li>
+                        </ul>
+                        <div class="notif-foot">
+                            <button class="link-btn small" onclick="switchView('threats'); toggleNotifPanel()">모든 위협 보기 →</button>
+                        </div>
+                    </div>
+                </div>
             </div>
+        </header>
+
+        <!-- ════════════════ VIEW: 대시보드 ════════════════ -->
+        <section id="view-dashboard" class="view active">
+
+            <section class="kpi-row">
+                <div class="kpi-card">
+                    <div class="kpi-icon-wrap blue"><span>📊</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">전체 이벤트</div>
+                        <div class="kpi-value" id="kpi-total">0</div>
+                        <div class="kpi-delta flat">실시간 집계</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon-wrap red"><span>🚨</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">실시간 · 높음</div>
+                        <div class="kpi-value red" id="kpi-high">0</div>
+                        <div class="kpi-delta flat">긴급 위협</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon-wrap orange"><span>⚠️</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">실시간 · 중간</div>
+                        <div class="kpi-value orange" id="kpi-medium">0</div>
+                        <div class="kpi-delta flat">의심 행위</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon-wrap blue2"><span>ℹ️</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">실시간 · 낮음</div>
+                        <div class="kpi-value blue" id="kpi-low">0</div>
+                        <div class="kpi-delta flat">정보성 로그</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon-wrap purple"><span>⏳</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">분석 대기</div>
+                        <div class="kpi-value purple" id="kpi-pending">0</div>
+                        <div class="kpi-delta flat">미결정 인시던트</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-head">
+                    <div>
+                        <h3>이벤트 타임라인</h3>
+                        <p class="card-sub">시간대별 보안 이벤트 분포</p>
+                    </div>
+                </div>
+                <div id="timeline-track" class="timeline-track"></div>
+                <div class="timeline-legend">
+                    <span class="lg lg-high">● 높음</span>
+                    <span class="lg lg-med">● 중간</span>
+                    <span class="lg lg-low">● 낮음</span>
+                </div>
+            </section>
+
+            <section class="detection-grid">
+                <div class="card detection-main">
+                    <div class="card-head">
+                        <div class="detection-title">
+                            <span class="sev-badge crit" id="featured-badge">최근 탐지 없음</span>
+                            <span class="detection-time" id="featured-time">―</span>
+                        </div>
+                    </div>
+                    <div class="detection-meta">
+                        <div class="meta-row"><span class="meta-k">호스트</span><span class="meta-v" id="featured-host">―</span></div>
+                        <div class="meta-row"><span class="meta-k">사용자</span><span class="meta-v" id="featured-user">―</span></div>
+                        <div class="meta-row"><span class="meta-k">엔진</span><span class="meta-v" id="featured-source">―</span></div>
+                        <div class="meta-row"><span class="meta-k">메시지</span><span class="meta-v mono" id="featured-message">아직 이벤트가 들어오지 않았습니다.</span></div>
+                    </div>
+                    <button class="link-btn" onclick="switchView('threats')">위협 탐지로 이동 →</button>
+                </div>
+
+                <div class="card detection-match">
+                    <h4 class="mini-head">엔진 상태</h4>
+                    <div class="engine-mini">
+                        <div class="engine-mini-row">
+                            <span class="engine-badge wazuh">행위 탐지</span>
+                            <span id="mini-wazuh-state" class="state-tag off">중지됨</span>
+                        </div>
+                        <div class="engine-mini-row">
+                            <span class="engine-badge yara">YARA</span>
+                            <span id="mini-yara-state" class="state-tag off">중지됨</span>
+                        </div>
+                    </div>
+                    <button class="primary-btn full" onclick="switchView('realtime')">실시간 탐지로 이동 →</button>
+                </div>
+
+                <div class="card detection-info">
+                    <h4 class="mini-head">대응 현황 요약</h4>
+                    <div class="info-row"><span class="info-ic red">!</span><div><div class="info-k">활성 위협</div><div class="info-v" id="featured-active">0건</div></div></div>
+                    <div class="info-row"><span class="info-ic blue">▶</span><div><div class="info-k">격리/차단 완료</div><div class="info-v" id="featured-resolved">0건</div></div></div>
+                    <div class="info-row"><span class="info-ic orange">⏳</span><div><div class="info-k">분석 대기</div><div class="info-v" id="featured-pending">0건</div></div></div>
+                </div>
+            </section>
+
+            <section class="widgets-grid">
+                <div class="card">
+                    <div class="card-head"><h3>심각도 분포</h3></div>
+                    <div class="donut-wrap">
+                        <svg viewBox="0 0 200 200" class="donut">
+                            <circle cx="100" cy="100" r="78" fill="none" stroke="#f1f3f5" stroke-width="22"/>
+                            <circle cx="100" cy="100" r="78" fill="none" stroke="#ef4444" stroke-width="22" stroke-dasharray="0 490" stroke-dashoffset="0" transform="rotate(-90 100 100)"/>
+                            <circle cx="100" cy="100" r="78" fill="none" stroke="#f59e0b" stroke-width="22" stroke-dasharray="0 490" stroke-dashoffset="0" transform="rotate(-90 100 100)"/>
+                            <circle cx="100" cy="100" r="78" fill="none" stroke="#3b82f6" stroke-width="22" stroke-dasharray="0 490" stroke-dashoffset="0" transform="rotate(-90 100 100)"/>
+                        </svg>
+                        <div class="donut-center">
+                            <div class="donut-label">전체</div>
+                            <div class="donut-value" id="donut-total">0</div>
+                        </div>
+                    </div>
+                    <div class="donut-legend">
+                        <div><span class="dot red"></span> 높음 <b>0</b></div>
+                        <div><span class="dot orange"></span> 중간 <b>0</b></div>
+                        <div><span class="dot blue"></span> 낮음 <b>0</b></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head"><h3>엔진별 이벤트</h3></div>
+                    <div class="bars" id="source-bars">
+                        <div class="bar-row"><div class="bar-label">행위 탐지</div><div class="bar-track"><div class="bar-fill blue" id="bar-wazuh" style="width:0%"></div></div><div class="bar-count" id="bar-wazuh-count">0</div></div>
+                        <div class="bar-row"><div class="bar-label">YARA</div><div class="bar-track"><div class="bar-fill orange" id="bar-yara" style="width:0%"></div></div><div class="bar-count" id="bar-yara-count">0</div></div>
+                        <div class="bar-row"><div class="bar-label">대응 (Response)</div><div class="bar-track"><div class="bar-fill amber" id="bar-response" style="width:0%"></div></div><div class="bar-count" id="bar-response-count">0</div></div>
+                    </div>
+                    <button class="link-btn small" onclick="switchView('analysis')">분석 결과로 이동 →</button>
+                </div>
+
+                <div class="card">
+                    <div class="card-head"><h3>최근 이벤트</h3></div>
+                    <ul class="recent-list" id="recent-list">
+                        <li class="empty-state" style="padding:20px;">아직 이벤트가 없습니다.</li>
+                    </ul>
+                    <button class="link-btn small" onclick="switchView('timeline')">전체 이벤트 보기 →</button>
+                </div>
+            </section>
         </section>
-    </div>
 
-    <div id="app-shell" class="app-shell app-hidden">
-        <aside class="sidebar">
-            <div class="sidebar-brand">
-                <p class="eyebrow">Endpoint Threat Response</p>
-                <h1>Dashboard</h1>
-                <p class="sidebar-copy">Wazuh events, YARA verification, response actions, and detection history in one command surface.</p>
+        <!-- ════════════════ VIEW: 이벤트 타임라인 ════════════════ -->
+        <section id="view-timeline" class="view">
+            <section class="card">
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <span class="filter-label">심각도</span>
+                        <button class="chip-btn active" data-sev="all" onclick="filterTimeline('sev','all',this)">전체</button>
+                        <button class="chip-btn" data-sev="high" onclick="filterTimeline('sev','high',this)">높음</button>
+                        <button class="chip-btn" data-sev="medium" onclick="filterTimeline('sev','medium',this)">중간</button>
+                        <button class="chip-btn" data-sev="low" onclick="filterTimeline('sev','low',this)">낮음</button>
+                    </div>
+                    <div class="filter-group">
+                        <span class="filter-label">엔진</span>
+                        <button class="chip-btn active" data-src="all" onclick="filterTimeline('src','all',this)">전체</button>
+                        <button class="chip-btn" data-src="wazuh" onclick="filterTimeline('src','wazuh',this)">행위 탐지</button>
+                        <button class="chip-btn" data-src="yara" onclick="filterTimeline('src','yara',this)">YARA</button>
+                        <button class="chip-btn" data-src="response" onclick="filterTimeline('src','response',this)">대응</button>
+                    </div>
+                    <input id="timeline-search" class="filter-search" placeholder="메시지 / 호스트 / 룰 검색…" oninput="renderTimelineView()">
+                </div>
+
+                <div class="timeline-summary">
+                    <div><span id="timeline-count">0</span>건의 이벤트 표시 중</div>
+                    <div class="timeline-summary-right">
+                        <span class="dot red"></span> <b id="ts-high">0</b>
+                        <span class="dot orange"></span> <b id="ts-medium">0</b>
+                        <span class="dot blue"></span> <b id="ts-low">0</b>
+                    </div>
+                </div>
+
+                <ul id="timeline-list" class="event-stream"></ul>
+            </section>
+        </section>
+
+        <!-- ════════════════ VIEW: 실시간 탐지 ════════════════ -->
+        <section id="view-realtime" class="view">
+
+            <!-- 실시간 탐지 안내 배너 -->
+            <div id="realtime-banner" class="realtime-banner">
+                <div class="rb-icon">◉</div>
+                <div class="rb-body">
+                    <div class="rb-title">실시간 탐지를 시작하려면 아래 엔진을 켜세요</div>
+                    <div class="rb-sub">행위 탐지는 Sysmon/프로세스 이벤트를, YARA는 파일 시그니처 매칭을 실시간 감시합니다.</div>
+                </div>
+                <button class="primary-btn" onclick="startAllEngines()">전체 엔진 시작</button>
             </div>
 
-            <div class="controls">
-                <button id="btn-wazuh" class="btn nav-btn" onclick="toggleWazuh()">
-                    <span class="nav-btn-title">Wazuh</span>
-                    <span class="nav-btn-copy">Live event stream and detection feed</span>
-                </button>
-                <button id="btn-yara-monitor" class="btn nav-btn" onclick="toggleYaraMonitor()">
-                    <span class="nav-btn-title">YARA Monitor</span>
-                    <span class="nav-btn-copy">Local critical rules for always-on scanning</span>
-                </button>
-                <button id="btn-yara-scan" class="btn nav-btn" onclick="openYaraDirectoryModal()">
-                    <span class="nav-btn-title">YARA Deep Scan</span>
-                    <span class="nav-btn-copy">External rules for selected folders</span>
-                </button>
-                <button id="btn-response" class="btn nav-btn" onclick="toggleResponseDashboard()">
-                    <span class="nav-btn-title">Response</span>
-                    <span class="nav-btn-copy">Open the incident response dashboard for delete and containment actions</span>
-                </button>
-                <button id="btn-logs" class="btn nav-btn accent" onclick="openLogViewer()">
-                    <span class="nav-btn-title">Log</span>
-                    <span class="nav-btn-copy">Open archived detections and response history</span>
-                </button>
-            </div>
-        </aside>
+            <section class="engine-grid">
+                <div class="card engine-card" id="wazuh-card">
+                    <div class="engine-head">
+                        <div class="engine-icon wazuh">B</div>
+                        <div>
+                            <h3>행위 탐지</h3>
+                            <p class="card-sub">Sysmon 기반 의심 행위 실시간 감시</p>
+                        </div>
+                        <div class="engine-status" id="wazuh-status-pill">중지됨</div>
+                    </div>
+                    <div class="engine-info">
+                        <div class="kv-row"><span>현재 상태</span><span id="wazuh-state">중지됨</span></div>
+                        <div class="kv-row"><span>수집 이벤트</span><span id="wazuh-counter">0건</span></div>
+                        <div class="kv-row"><span>마지막 활동</span><span id="wazuh-last">―</span></div>
+                    </div>
+                    <button id="btn-wazuh-toggle" class="primary-btn full" onclick="toggleWazuh()">
+                        <span class="btn-icon">▶</span><span>행위 탐지 시작</span>
+                    </button>
+                </div>
 
-        <main class="main-board">
-            <header class="topbar">
-                <div>
-                    <p id="topbar-section-label" class="topbar-label">Overview</p>
-                    <h2 id="topbar-title">Logs</h2>
-                </div>
-                <div class="topbar-actions">
-                    <div id="user-chip" class="user-chip">User</div>
-                    <button class="btn ghost logout-btn" type="button" onclick="logout()">Logout</button>
-                </div>
-                <div class="status-indicator">
-                    <span id="ws-status" class="offline">Disconnected</span>
-                </div>
-            </header>
-
-            <section id="response-dashboard" class="hero-card">
-                <div class="hero-copy">
-                    <p id="response-panel-label" class="section-label">Selected Panel</p>
-                    <h3 id="response-panel-title">Real-time incident board</h3>
-                    <p id="response-panel-copy">Open incidents, current response recommendations, and monitoring health appear here first.</p>
-                </div>
-                <div class="response-stream">
-                    <div id="response-summary" class="response-summary">No incidents yet.</div>
-                    <div id="response-incidents" class="incident-list"></div>
+                <div class="card engine-card" id="yara-card">
+                    <div class="engine-head">
+                        <div class="engine-icon yara">Y</div>
+                        <div>
+                            <h3>YARA 실시간 모니터</h3>
+                            <p class="card-sub">로컬 중요 룰 기반 상시 스캔</p>
+                        </div>
+                        <div class="engine-status" id="yara-status-pill">중지됨</div>
+                    </div>
+                    <div class="engine-info">
+                        <div class="kv-row"><span>현재 상태</span><span id="yara-state">중지됨</span></div>
+                        <div class="kv-row"><span>검증 파일</span><span id="yara-counter">0건</span></div>
+                        <div class="kv-row"><span>마지막 활동</span><span id="yara-last">―</span></div>
+                    </div>
+                    <button id="btn-yara-toggle" class="primary-btn full" onclick="toggleYara()">
+                        <span class="btn-icon">▶</span><span>YARA 시작</span>
+                    </button>
                 </div>
             </section>
 
-            <section id="monitor-console-grid" class="console-grid">
-                <div class="console-box">
-                    <div class="console-heading">
-                        <p class="section-label">Wazuh</p>
-                        <h3>Event Stream</h3>
+            <section class="stream-grid">
+                <div class="card stream-card">
+                    <div class="card-head">
+                        <h3><span class="dot-wazuh"></span> 행위 탐지 라이브 스트림</h3>
+                        <div class="stream-actions">
+                            <span id="wazuh-stream-count" class="stream-count">0건</span>
+                            <button class="chip-btn ghost" onclick="clearStream('wazuh')">지우기</button>
+                        </div>
                     </div>
-                    <div id="wazuh-logs" class="log-area wazuh"></div>
+                    <div id="wazuh-logs" class="log-stream wazuh">
+                        <div class="log-placeholder">행위 탐지 시작 후 이벤트가 여기에 표시됩니다.</div>
+                    </div>
                 </div>
-
-                <div class="console-box">
-                    <div class="console-heading">
-                        <p class="section-label">YARA</p>
-                        <h3>Verification Stream</h3>
+                <div class="card stream-card">
+                    <div class="card-head">
+                        <h3><span class="dot-yara"></span> YARA 라이브 스트림</h3>
+                        <div class="stream-actions">
+                            <span id="yara-stream-count" class="stream-count">0건</span>
+                            <button class="chip-btn ghost" onclick="clearStream('yara')">지우기</button>
+                        </div>
                     </div>
-                    <div id="yara-logs" class="log-area yara"></div>
+                    <div id="yara-logs" class="log-stream yara">
+                        <div class="log-placeholder">YARA 시작 후 매칭 결과가 여기에 표시됩니다.</div>
+                    </div>
                 </div>
             </section>
-        </main>
-    </div>
+        </section>
 
-    <div id="yara-modal" class="modal">
-        <div class="modal-content modal-content-wide">
-            <span class="close" onclick="closeYaraDirectoryModal()">&times;</span>
-            <h2>Select Folders For Yara Deep Scan</h2>
-            <p class="modal-copy">Choose the folders you want to scan with the external rule set. After the initial scan finishes, change monitoring will continue for the selected folders.</p>
-            <div id="yara-directory-status" class="directory-status">Loading directories...</div>
-            <div id="yara-selected-summary" class="selected-summary">No folders selected.</div>
-            <div id="yara-directory-list" class="directory-list"></div>
-            <div class="modal-actions">
-                <button class="btn ghost" onclick="closeYaraDirectoryModal()">Cancel</button>
-                <button id="btn-start-yara-selected" class="btn secondary" onclick="startSelectedYaraScan()">Start Selected Scan</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="log-modal" class="modal">
-        <div class="modal-content modal-content-wide">
-            <span class="close" onclick="closeLogViewer()">&times;</span>
-            <h2>Historical Detections</h2>
-            <p class="modal-copy">Review Wazuh alerts, Yara verification results, and response actions separately. Each panel keeps its own day selection for quick triage.</p>
-            <div class="history-toolbar">
-                <div id="admin-log-user-picker" class="history-user-filter history-user-filter-hidden">
-                    <label for="log-user-select">View User</label>
-                    <select id="log-user-select" onchange="changeLogViewerUser()">
-                        <option value="">Loading...</option>
-                    </select>
+        <!-- ════════════════ VIEW: 분석 결과 ════════════════ -->
+        <section id="view-analysis" class="view">
+            <section class="analysis-grid">
+                <div class="card scan-control">
+                    <div class="card-head"><h3>심층 스캔 시작</h3></div>
+                    <p class="card-sub" style="margin-bottom: 14px;">외부 룰셋(elastic)으로 선택한 폴더를 정밀 검사합니다.</p>
+                    <div class="dir-summary" id="dir-summary">선택된 폴더 없음</div>
+                    <div class="folder-pick-row">
+                        <button class="ghost-btn" id="btn-pick-scan-dir" type="button" onclick="pickScanDirectory()">폴더 선택</button>
+                    </div>
+                    <div class="scan-actions">
+                        <button class="primary-btn" id="btn-start-scan" onclick="startDeepScan()" disabled>스캔 시작</button>
+                        <button class="danger-btn" id="btn-stop-scan" onclick="stopDeepScan()" disabled>스캔 중지</button>
+                        <button class="ghost-btn" onclick="clearScanSelection()">선택 해제</button>
+                    </div>
                 </div>
-                <button id="btn-log-clear-toggle" class="btn ghost" type="button" onclick="toggleLogClearMode()">Clear Mode Off</button>
-                <button id="btn-clear-my-logs" class="btn danger" type="button" onclick="clearMyLogs()" disabled>Delete My Logs</button>
-            </div>
-            <div class="history-grid">
-                <section class="history-panel">
-                    <h3>Wazuh Logs</h3>
-                    <div class="history-panel-actions">
-                        <select id="wazuh-log-date-select" onchange="fetchLogContent('wazuh')">
-                            <option value="">Loading...</option>
-                        </select>
-                        <button id="btn-clear-wazuh-log-date" class="btn danger history-delete-btn" type="button" onclick="clearSelectedLogDate('wazuh')" disabled>Delete Selected Day</button>
-                    </div>
-                    <div id="wazuh-history-logs" class="log-area history"></div>
-                </section>
-                <section class="history-panel">
-                    <h3>Yara Logs</h3>
-                    <div class="history-panel-actions">
-                        <select id="yara-log-date-select" onchange="fetchLogContent('yara')">
-                            <option value="">Loading...</option>
-                        </select>
-                        <button id="btn-clear-yara-log-date" class="btn danger history-delete-btn" type="button" onclick="clearSelectedLogDate('yara')" disabled>Delete Selected Day</button>
-                    </div>
-                    <div id="yara-history-logs" class="log-area history"></div>
-                </section>
-                <section class="history-panel">
-                    <h3>Response Logs</h3>
-                    <div class="history-panel-actions">
-                        <select id="response-log-date-select" onchange="fetchLogContent('response')">
-                            <option value="">Loading...</option>
-                        </select>
-                        <button id="btn-clear-response-log-date" class="btn danger history-delete-btn" type="button" onclick="clearSelectedLogDate('response')" disabled>Delete Selected Day</button>
-                    </div>
-                    <div id="response-history-logs" class="log-area history"></div>
-                </section>
-            </div>
-        </div>
-    </div>
 
-    <script src="app.js"></script>
+                <div class="card">
+                    <div class="card-head">
+                        <h3>YARA 매칭 결과</h3>
+                        <span class="scan-status" id="scan-status">대기 중</span>
+                    </div>
+                    <ul id="scan-results" class="match-list">
+                        <li class="empty-state">아직 스캔 결과가 없습니다. 좌측에서 폴더를 선택하고 스캔을 시작하세요.</li>
+                    </ul>
+                </div>
+            </section>
+        </section>
+
+        <!-- ════════════════ VIEW: 위협 탐지 ════════════════ -->
+        <section id="view-threats" class="view">
+            <section class="threats-summary">
+                <div class="kpi-card mini">
+                    <div class="kpi-icon-wrap red"><span>!</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">활성 위협</div>
+                        <div class="kpi-value red" id="th-active">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card mini">
+                    <div class="kpi-icon-wrap blue2"><span>▶</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">격리/대응 완료</div>
+                        <div class="kpi-value blue" id="th-contained">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card mini">
+                    <div class="kpi-icon-wrap orange"><span>⏳</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">분석 대기</div>
+                        <div class="kpi-value orange" id="th-pending">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card mini">
+                    <div class="kpi-icon-wrap purple"><span>▼</span></div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">유지 관찰</div>
+                        <div class="kpi-value purple" id="th-kept">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-head">
+                    <div>
+                        <h3>인시던트 목록</h3>
+                        <p class="card-sub">탐지된 위협에 대한 대응 액션을 직접 수행할 수 있습니다.</p>
+                    </div>
+                    <div class="head-actions">
+                        <button id="incident-refresh-btn" class="ghost-btn" onclick="loadIncidents(true)">새로고침</button>
+                    </div>
+                </div>
+                <div id="incident-list" class="incident-list">
+                    <div class="empty-state">인시던트를 불러오는 중...</div>
+                </div>
+            </section>
+        </section>
+
+        <!-- ════════════════ VIEW: 보고서 ════════════════ -->
+        <section id="view-reports" class="view">
+            <section class="card">
+                <div class="card-head">
+                    <div>
+                        <h3>저장된 로그 보기</h3>
+                        <p class="card-sub">날짜·엔진별로 보관된 로그를 조회·삭제할 수 있습니다.</p>
+                    </div>
+                </div>
+                <div class="report-filters">
+                    <div class="filter-group">
+                        <label class="filter-label">엔진</label>
+                        <select id="report-source" class="select-input" onchange="loadReportDates()">
+                            <option value="wazuh">행위 탐지</option>
+                            <option value="yara">YARA</option>
+                            <option value="response">대응 (Response)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">날짜</label>
+                        <select id="report-date" class="select-input" onchange="loadReportLog()">
+                            <option value="">날짜를 선택하세요</option>
+                        </select>
+                    </div>
+                    <div id="report-admin-user-wrap" class="filter-group hidden">
+                        <label class="filter-label">사용자 (관리자)</label>
+                        <select id="report-user" class="select-input" onchange="loadReportDates()">
+                            <option value="">내 로그</option>
+                        </select>
+                    </div>
+                    <div class="filter-group push-right">
+                        <button id="btn-clear-day" class="danger-btn small" onclick="clearReportDay()" disabled>이 날짜 삭제</button>
+                        <button id="btn-clear-all" class="danger-btn small" onclick="clearAllLogs()">전체 로그 삭제</button>
+                    </div>
+                </div>
+
+                <div class="report-meta">
+                    <span id="report-meta-text">날짜를 선택하면 로그를 표시합니다.</span>
+                    <span id="report-line-count" class="report-line-count"></span>
+                </div>
+
+                <pre id="report-content" class="report-viewer"></pre>
+            </section>
+        </section>
+
+        <!-- ════════════════ VIEW: 설정 ════════════════ -->
+        <section id="view-settings" class="view">
+            <section class="settings-grid">
+                <div class="card">
+                    <div class="card-head"><h3>계정 정보</h3></div>
+                    <div class="settings-row"><span>사용자명</span><span id="set-username" class="mono">―</span></div>
+                    <div class="settings-row"><span>권한</span><span id="set-role">―</span></div>
+                    <div class="settings-row"><span>세션 토큰</span><span class="mono small" id="set-token">―</span></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head"><h3>알림 설정</h3></div>
+                    <div class="settings-toggle"><span>긴급 위협 탐지 알림</span><label class="switch"><input type="checkbox" id="set-notif-high" checked><span class="slider"></span></label></div>
+                    <div class="settings-toggle"><span>YARA 매칭 알림</span><label class="switch"><input type="checkbox" id="set-notif-yara" checked><span class="slider"></span></label></div>
+                    <div class="settings-toggle"><span>브라우저 데스크톱 알림</span><label class="switch"><input type="checkbox" id="set-notif-desktop" onchange="toggleDesktopNotif(this)"><span class="slider"></span></label></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <div>
+                            <h3>자동 대응 정책</h3>
+                            <p class="card-sub">새 인시던트의 권장 결정이 일치할 때 자동으로 액션 수행</p>
+                        </div>
+                    </div>
+                    <div class="settings-toggle" title="risk_label=high & file_path 있을 때 자동 격리">
+                        <div>
+                            <div>Critical 탐지 시 자동 격리</div>
+                            <div class="settings-toggle-sub">권장 결정 = QUARANTINE 인 인시던트를 즉시 격리합니다</div>
+                        </div>
+                        <label class="switch"><input type="checkbox" id="auto-quarantine"><span class="slider"></span></label>
+                    </div>
+                    <div class="settings-toggle">
+                        <div>
+                            <div>의심 IP 자동 차단</div>
+                            <div class="settings-toggle-sub">권장 결정 = BLOCK_IP 인 인시던트를 즉시 차단합니다</div>
+                        </div>
+                        <label class="switch"><input type="checkbox" id="auto-block-ip"><span class="slider"></span></label>
+                    </div>
+                    <div class="settings-toggle">
+                        <div>
+                            <div>의심 프로세스 자동 종료</div>
+                            <div class="settings-toggle-sub">권장 결정 = TERMINATE 인 인시던트의 프로세스를 즉시 종료합니다</div>
+                        </div>
+                        <label class="switch"><input type="checkbox" id="auto-terminate"><span class="slider"></span></label>
+                    </div>
+                    <div id="auto-policy-log" class="auto-policy-log">
+                        <div class="auto-policy-empty">아직 자동 대응 실행 이력이 없습니다.</div>
+                    </div>
+                </div>
+
+                <div id="settings-admin-card" class="card hidden">
+                    <div class="card-head"><h3>사용자 관리 <span class="admin-tag">관리자 전용</span></h3></div>
+                    <ul id="user-list" class="user-list"></ul>
+                </div>
+
+                <div class="card danger-card">
+                    <div class="card-head"><h3>위험 구역</h3></div>
+                    <p class="card-sub">이 작업은 되돌릴 수 없습니다.</p>
+                    <button class="danger-btn" onclick="clearAllLogs()">내 모든 로그 삭제</button>
+                </div>
+            </section>
+        </section>
+
+    </main>
+</div>
+
+<!-- ━━━━━━ DETAIL MODAL ━━━━━━ -->
+<div id="detail-modal" class="modal-overlay" onclick="if(event.target===this)closeDetail()">
+    <div class="modal-card">
+        <header class="modal-head">
+            <div>
+                <span class="sev-badge crit" id="modal-sev">위협 상세</span>
+                <h2 id="modal-title">―</h2>
+            </div>
+            <button class="modal-close" onclick="closeDetail()">✕</button>
+        </header>
+        <div class="modal-body" id="modal-body"></div>
+    </div>
+</div>
+
+<!-- ━━━━━━ TOAST ━━━━━━ -->
+<div id="toast-container" class="toast-container"></div>
+
+<script src="app.js"></script>
 </body>
 </html>
