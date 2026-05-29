@@ -3,7 +3,6 @@ import hashlib
 import ipaddress
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -43,7 +42,6 @@ try:
         save_log,
     )
     from backend.src.behavior_monitor import BehaviorMonitor
-    from backend.src.wazuh_monitor import WazuhMonitor
     from backend.src.yara_scanner import YaraScanner, scan_file_with_rules
 except ModuleNotFoundError:
     from runtime_paths import app_root, bundle_root
@@ -64,7 +62,6 @@ except ModuleNotFoundError:
         save_log,
     )
     from src.behavior_monitor import BehaviorMonitor
-    from src.wazuh_monitor import WazuhMonitor
     from src.yara_scanner import YaraScanner, scan_file_with_rules
 
 PROJECT_ROOT = app_root()
@@ -81,32 +78,13 @@ YARA_RULE_SOURCE_LABELS = {
     "local": "local-critical",
     "external": "external-extended",
 }
-LOCAL_WAZUH_ALERT_LOG = str(PROJECT_ROOT / "logs" / "wazuh_alerts.jsonl")
-LOCAL_WAZUH_ALERT_LOG_ALT = str(PROJECT_ROOT / "logs" / "wazuh_alert.jsonl")
-DEFAULT_WAZUH_ALERT_LOG = os.getenv("WAZUH_ALERT_LOG_PATH", LOCAL_WAZUH_ALERT_LOG)
 BEHAVIOR_RULE_REFERENCE_PATH = BUNDLE_ROOT / "backend" / "rules" / "wazuh" / "official" / "rules" / "0595-win-sysmon_rules.xml"
 SYSMON_DOWNLOAD_URL = "https://download.sysinternals.com/files/Sysmon.zip"
 SYSMON_EVENT_LOG_NAME = "Microsoft-Windows-Sysmon/Operational"
 SYSMON_INSTALL_ROOT = Path(os.getenv("CAPSTONE_SYSMON_INSTALL_ROOT", str(PROJECT_ROOT / "tools" / "sysmon"))).expanduser()
 SYSMON_CONFIG_PATH = BUNDLE_ROOT / "backend" / "rules" / "sysmon" / "capstone_sysmon_config.xml"
-WAZUH_MANAGER_INSTALL_URL = "https://documentation.wazuh.com/current/installation-guide/wazuh-server/index.html"
-WAZUH_WINDOWS_AGENT_INSTALL_URL = "https://documentation.wazuh.com/current/installation-guide/wazuh-agent/wazuh-agent-package-windows.html"
-WAZUH_MANAGER_INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install_wazuh_manager_cli.ps1"
-WAZUH_ALERTS_BRIDGE_SCRIPT = PROJECT_ROOT / "scripts" / "bridge_wazuh_alerts_to_local.ps1"
-WAZUH_WSL_SETUP_SCRIPT = PROJECT_ROOT / "scripts" / "setup_wazuh_manager_wsl.ps1"
-WAZUH_WSL_ALERTS_BRIDGE_SCRIPT = PROJECT_ROOT / "scripts" / "bridge_wazuh_alerts_from_wsl.ps1"
 INCIDENTS_PATH = PROJECT_ROOT / "data" / "incidents.json"
 QUARANTINE_ROOT = PROJECT_ROOT / "quarantine"
-WAZUH_ALERT_LOG_CANDIDATES = [
-    path for path in [
-        os.getenv("WAZUH_ALERT_LOG_PATH"),
-        r"C:\Program Files (x86)\ossec-agent\logs\alerts\alerts.json",
-        r"C:\Program Files\ossec-agent\logs\alerts\alerts.json",
-        LOCAL_WAZUH_ALERT_LOG,
-        LOCAL_WAZUH_ALERT_LOG_ALT,
-    ]
-    if path
-]
 FRONTEND_DIR = BUNDLE_ROOT / "frontend"
 
 
@@ -130,23 +108,10 @@ app.add_middleware(
 )
 
 wazuh_thread = None
-wazuh_bridge_process = None
 yara_thread = None
 yara_scan_thread = None
 connected_websockets = []
 loop = None
-selected_wazuh_alert_log = None
-WAZUH_SETUP_LOCK = Lock()
-WAZUH_SETUP_JOB = {
-    "running": False,
-    "status": "idle",
-    "message": "",
-    "started_at": None,
-    "finished_at": None,
-    "host": None,
-    "log": [],
-    "returncode": None,
-}
 LOG_SOURCES = {"wazuh", "yara", "response"}
 INCIDENTS = []
 INCIDENTS_LOCK = Lock()
@@ -250,7 +215,7 @@ def choose_scan_directory_dialog():
     root.attributes("-topmost", True)
     try:
         selected_path = filedialog.askdirectory(
-            title="심층 스캔 폴더 선택",
+            title="?ъ링 ?ㅼ틪 ?대뜑 ?좏깮",
             mustexist=True,
         )
     finally:
@@ -290,324 +255,8 @@ def get_default_yara_monitor_paths():
     return paths
 
 
-def resolve_wazuh_alert_log():
-    if selected_wazuh_alert_log and os.path.isfile(selected_wazuh_alert_log):
-        return os.path.normpath(selected_wazuh_alert_log)
 
-    local_candidates = {os.path.normcase(os.path.normpath(path)) for path in [LOCAL_WAZUH_ALERT_LOG, LOCAL_WAZUH_ALERT_LOG_ALT]}
-    existing_local = []
-    for candidate in WAZUH_ALERT_LOG_CANDIDATES:
-        normalized = os.path.normpath(candidate)
-        if os.path.isfile(normalized):
-            if os.path.normcase(normalized) in local_candidates:
-                existing_local.append(normalized)
-                continue
-            return normalized
-
-    for local_path in existing_local:
-        if has_wazuh_alert_entries(local_path):
-            return local_path
-    if existing_local:
-        return existing_local[0]
-
-    fallback = os.path.normpath(DEFAULT_WAZUH_ALERT_LOG or LOCAL_WAZUH_ALERT_LOG)
-    os.makedirs(os.path.dirname(fallback), exist_ok=True)
-    Path(fallback).touch(exist_ok=True)
-    return fallback
-
-
-def is_local_wazuh_fallback_path(path: str | None):
-    if not path:
-        return False
-    try:
-        resolved = Path(path).resolve()
-        return resolved in {Path(LOCAL_WAZUH_ALERT_LOG).resolve(), Path(LOCAL_WAZUH_ALERT_LOG_ALT).resolve()}
-    except (OSError, RuntimeError, ValueError):
-        normalized = os.path.normcase(os.path.normpath(path))
-        return normalized in {
-            os.path.normcase(os.path.normpath(LOCAL_WAZUH_ALERT_LOG)),
-            os.path.normcase(os.path.normpath(LOCAL_WAZUH_ALERT_LOG_ALT)),
-        }
-
-
-def has_wazuh_alert_entries(path: str | None):
-    if not path or not os.path.isfile(path):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8") as file_handle:
-            for line in file_handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    payload = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(payload, dict) and (
-                    isinstance(payload.get("rule"), dict)
-                    or isinstance(payload.get("agent"), dict)
-                    or payload.get("timestamp")
-                ):
-                    return True
-    except OSError:
-        return False
-    return False
-
-
-def validate_wazuh_alert_log(path: str):
-    normalized = os.path.normpath(path)
-    if not os.path.isfile(normalized):
-        raise HTTPException(status_code=400, detail="Selected Wazuh alert log file does not exist.")
-    if os.path.getsize(normalized) == 0:
-        return normalized
-
-    checked = 0
-    with open(normalized, "r", encoding="utf-8", errors="replace") as file_handle:
-        for line in file_handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            checked += 1
-            try:
-                payload = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=400, detail=f"Selected file is not JSONL Wazuh alerts format: {exc}") from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(status_code=400, detail="Selected file contains a non-object JSON alert line.")
-            if isinstance(payload.get("rule"), dict) or isinstance(payload.get("agent"), dict) or payload.get("timestamp"):
-                return normalized
-            if checked >= 20:
-                break
-
-    raise HTTPException(
-        status_code=400,
-        detail="Selected file does not look like Wazuh alerts.json. Expected JSON lines with rule, agent, or timestamp fields.",
-    )
-
-
-def choose_wazuh_alert_log_dialog():
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"File picker is unavailable: {exc}") from exc
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    try:
-        selected_path = filedialog.askopenfilename(
-            title="Wazuh alerts.json 또는 JSONL 파일 선택",
-            filetypes=[
-                ("Wazuh alert logs", "*.json *.jsonl *.log"),
-                ("All files", "*.*"),
-            ],
-        )
-    finally:
-        root.destroy()
-
-    if not selected_path:
-        return None
-    return validate_wazuh_alert_log(selected_path)
-
-
-def allow_wazuh_alert_log_bridge():
-    bridge_flags = [
-        os.getenv("WAZUH_ALLOW_ALERT_LOG_BRIDGE", ""),
-    ]
-    return any(flag.strip().lower() in {"1", "true", "yes", "on"} for flag in bridge_flags)
-
-
-def get_wazuh_windows_agent_state():
-    service_found = False
-    service_running = False
-    if os.name == "nt":
-        for service_name in ("WazuhSvc", "Wazuh", "ossec-agent"):
-            try:
-                completed = subprocess.run(
-                    ["sc.exe", "query", service_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if completed.returncode != 0:
-                continue
-            service_found = True
-            service_running = "RUNNING" in (completed.stdout or "").upper()
-            break
-
-    install_paths = [
-        r"C:\Program Files (x86)\ossec-agent",
-        r"C:\Program Files\ossec-agent",
-    ]
-    install_path = next((path for path in install_paths if os.path.isdir(path)), None)
-    return {
-        "service_found": service_found,
-        "service_running": service_running,
-        "install_path": install_path,
-    }
-
-
-def get_wazuh_runtime_state():
-    log_path = resolve_wazuh_alert_log()
-    env_log_path = os.getenv("WAZUH_ALERT_LOG_PATH")
-    bridge_log_path = is_local_wazuh_fallback_path(log_path)
-    local_has_alerts = has_wazuh_alert_entries(log_path)
-    cli_bridge_ready = bool(bridge_log_path and (local_has_alerts or allow_wazuh_alert_log_bridge()))
-    real_alert_log = bool(
-        log_path
-        and os.path.isfile(log_path)
-        and not bridge_log_path
-    )
-    configured_manager_log = bool(env_log_path and os.path.isfile(os.path.normpath(env_log_path)))
-    agent_state = get_wazuh_windows_agent_state()
-    ready = real_alert_log or configured_manager_log or cli_bridge_ready
-    return {
-        "ready": ready,
-        "reason": None if ready else "missing_wazuh_manager",
-        "log_path": log_path,
-        "real_alert_log": real_alert_log,
-        "configured_manager_log": configured_manager_log,
-        "bridge_log_path": bridge_log_path,
-        "cli_bridge_ready": cli_bridge_ready,
-        "local_has_alerts": local_has_alerts,
-        "allow_alert_log_bridge": allow_wazuh_alert_log_bridge(),
-        "agent": agent_state,
-        "manager_install_url": WAZUH_MANAGER_INSTALL_URL,
-        "windows_agent_install_url": WAZUH_WINDOWS_AGENT_INSTALL_URL,
-        "connector_script": str(PROJECT_ROOT / "scripts" / "connect_wazuh_windows_agent.ps1"),
-        "manager_install_script": str(WAZUH_MANAGER_INSTALL_SCRIPT),
-        "alerts_bridge_script": str(WAZUH_ALERTS_BRIDGE_SCRIPT),
-    }
-
-
-def sanitize_setup_text(value: str | None, *, default: str = ""):
-    return (value or default).strip()
-
-
-def validate_setup_host(host: str):
-    host = sanitize_setup_text(host)
-    if not host:
-        raise HTTPException(status_code=400, detail="Linux Manager host/IP is required.")
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,255}", host):
-        raise HTTPException(status_code=400, detail="Host/IP contains unsupported characters.")
-    return host
-
-
-def validate_setup_user(username: str):
-    username = sanitize_setup_text(username)
-    if username and not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", username):
-        raise HTTPException(status_code=400, detail="SSH username contains unsupported characters.")
-    return username
-
-
-def validate_setup_port(port_value):
-    try:
-        port = int(port_value or 22)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="SSH port must be a number.") from exc
-    if port < 1 or port > 65535:
-        raise HTTPException(status_code=400, detail="SSH port must be between 1 and 65535.")
-    return port
-
-
-def validate_wsl_distro(distro: str | None):
-    distro = sanitize_setup_text(distro, default="Ubuntu")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", distro):
-        raise HTTPException(status_code=400, detail="WSL distro name contains unsupported characters.")
-    return distro
-
-
-def update_wazuh_setup_job(**updates):
-    with WAZUH_SETUP_LOCK:
-        WAZUH_SETUP_JOB.update(updates)
-        return dict(WAZUH_SETUP_JOB)
-
-
-def append_wazuh_setup_log(message: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    line = f"[{timestamp}] {message}"
-    with WAZUH_SETUP_LOCK:
-        WAZUH_SETUP_JOB["log"].append(line)
-        WAZUH_SETUP_JOB["log"] = WAZUH_SETUP_JOB["log"][-200:]
-    return line
-
-
-def get_wazuh_setup_job_snapshot():
-    with WAZUH_SETUP_LOCK:
-        snapshot = dict(WAZUH_SETUP_JOB)
-        snapshot["log"] = list(WAZUH_SETUP_JOB["log"])
-        return snapshot
-
-
-def run_subprocess_for_setup(command: list[str], cwd: str | os.PathLike | None = None):
-    append_wazuh_setup_log("Running: " + " ".join(command))
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd) if cwd else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert process.stdout is not None
-    for output_line in process.stdout:
-        stripped = output_line.strip()
-        if stripped:
-            append_wazuh_setup_log(stripped)
-    return process.wait()
-
-
-def launch_visible_setup_window(command: list[str]):
-    append_wazuh_setup_log("Launching visible setup window: " + " ".join(command))
-    creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
-    return subprocess.Popen(
-        command,
-        cwd=str(PROJECT_ROOT),
-        creationflags=creationflags,
-    )
-
-
-def start_wazuh_alerts_bridge_process(host: str, user: str, port: int):
-    global wazuh_bridge_process
-    if wazuh_bridge_process and wazuh_bridge_process.poll() is None:
-        append_wazuh_setup_log("Wazuh alerts bridge is already running.")
-        return
-
-    os.environ["WAZUH_ALERT_LOG_PATH"] = LOCAL_WAZUH_ALERT_LOG
-    os.environ["WAZUH_ALLOW_ALERT_LOG_BRIDGE"] = "1"
-    Path(LOCAL_WAZUH_ALERT_LOG).parent.mkdir(parents=True, exist_ok=True)
-    Path(LOCAL_WAZUH_ALERT_LOG).touch(exist_ok=True)
-
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(WAZUH_ALERTS_BRIDGE_SCRIPT),
-        "-HostName",
-        host,
-        "-Port",
-        str(port),
-    ]
-    if user:
-        command.extend(["-User", user])
-
-    append_wazuh_setup_log("Starting alerts bridge process.")
-    wazuh_bridge_process = subprocess.Popen(
-        command,
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def start_wazuh_monitor_from_runtime(username: str):
+def start_behavior_monitor_from_runtime(username: str):
     global wazuh_thread
     if wazuh_thread and wazuh_thread.is_alive():
         return True
@@ -622,63 +271,6 @@ def start_wazuh_monitor_from_runtime(username: str):
     wazuh_thread.start()
     return True
 
-
-def wazuh_manager_setup_worker(payload: dict, username: str):
-    host = payload["host"]
-    user = payload.get("user", "")
-    port = payload.get("port", 22)
-    try:
-        update_wazuh_setup_job(status="installing_manager", message="Installing Wazuh Manager through the official CLI helper.")
-        command = [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(WAZUH_MANAGER_INSTALL_SCRIPT),
-            "-HostName",
-            host,
-            "-Port",
-            str(port),
-            "-InstallCapstoneRules",
-            "-ConnectWindowsAgent",
-        ]
-        if user:
-            command.extend(["-User", user])
-        if payload.get("agent_manager_address"):
-            command.extend(["-AgentManagerAddress", payload["agent_manager_address"]])
-
-        returncode = run_subprocess_for_setup(command, PROJECT_ROOT)
-        update_wazuh_setup_job(returncode=returncode)
-        if returncode != 0:
-            update_wazuh_setup_job(
-                running=False,
-                status="failed",
-                message=f"Wazuh Manager setup failed with exit code {returncode}.",
-                finished_at=datetime.now().isoformat(timespec="seconds"),
-            )
-            broadcast_log("wazuh", f"Wazuh Manager setup failed with exit code {returncode}.", username)
-            return
-
-        update_wazuh_setup_job(status="starting_bridge", message="Starting Wazuh alerts bridge.")
-        start_wazuh_alerts_bridge_process(host, user, port)
-        started_monitor = start_wazuh_monitor_from_runtime(username)
-        update_wazuh_setup_job(
-            running=False,
-            status="ready" if started_monitor else "bridge_started",
-            message="Wazuh Manager setup finished. Wazuh monitoring is running." if started_monitor else "Wazuh Manager setup finished. Alerts bridge started; press Wazuh start again.",
-            finished_at=datetime.now().isoformat(timespec="seconds"),
-        )
-        broadcast_log("wazuh", "Wazuh Manager setup finished. Alerts bridge is starting.", username)
-    except Exception as exc:
-        append_wazuh_setup_log(f"ERROR: {exc}")
-        update_wazuh_setup_job(
-            running=False,
-            status="failed",
-            message=str(exc),
-            finished_at=datetime.now().isoformat(timespec="seconds"),
-        )
-        broadcast_log("wazuh", f"Wazuh Manager setup failed: {exc}", username)
 
 
 def sanitize_log_source(source: str):
@@ -2191,135 +1783,12 @@ def start_wazuh(current_user: dict = Depends(require_auth)):
         runtime = wazuh_thread.get_status() if hasattr(wazuh_thread, "get_status") else {}
         return {"status": "already running", "mode": "behavior", "runtime": runtime}
 
-    started = start_wazuh_monitor_from_runtime(current_user["username"])
+    started = start_behavior_monitor_from_runtime(current_user["username"])
     if not started:
         raise HTTPException(status_code=500, detail="Behavior detection could not start.")
     runtime = wazuh_thread.get_status() if hasattr(wazuh_thread, "get_status") else {}
     return {"status": "started", "mode": "behavior", "runtime": runtime}
 
-
-@app.post("/api/wazuh/select-alert-log")
-def select_wazuh_alert_log(payload: dict | None = None, current_user: dict = Depends(require_auth)):
-    global selected_wazuh_alert_log
-    requested_path = (payload or {}).get("path")
-    selected_path = validate_wazuh_alert_log(requested_path) if requested_path else choose_wazuh_alert_log_dialog()
-    if not selected_path:
-        return {"status": "cancelled"}
-    selected_wazuh_alert_log = selected_path
-    os.environ["WAZUH_ALERT_LOG_PATH"] = selected_path
-    broadcast_log("wazuh", f"Selected Wazuh alerts log: {selected_path}", current_user["username"])
-    return {
-        "status": "selected",
-        "log_path": selected_path,
-        "runtime": get_wazuh_runtime_state(),
-    }
-
-
-@app.get("/api/wazuh/setup-status")
-def get_wazuh_setup_status(current_user: dict = Depends(require_auth)):
-    return get_wazuh_setup_job_snapshot()
-
-
-@app.post("/api/wazuh/setup-manager")
-def setup_wazuh_manager(payload: dict | None = None, current_user: dict = Depends(require_auth)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
-    if os.name != "nt":
-        raise HTTPException(status_code=400, detail="This setup helper is written for the Windows project host.")
-    if not WAZUH_MANAGER_INSTALL_SCRIPT.exists():
-        raise HTTPException(status_code=500, detail=f"Missing setup script: {WAZUH_MANAGER_INSTALL_SCRIPT}")
-    if not WAZUH_ALERTS_BRIDGE_SCRIPT.exists():
-        raise HTTPException(status_code=500, detail=f"Missing bridge script: {WAZUH_ALERTS_BRIDGE_SCRIPT}")
-
-    payload = payload or {}
-    host = validate_setup_host(payload.get("host"))
-    user = validate_setup_user(payload.get("user", ""))
-    port = validate_setup_port(payload.get("port", 22))
-    agent_manager_address = sanitize_setup_text(payload.get("agent_manager_address"), default=host)
-    if agent_manager_address:
-        validate_setup_host(agent_manager_address)
-
-    with WAZUH_SETUP_LOCK:
-        if WAZUH_SETUP_JOB["running"]:
-            return dict(WAZUH_SETUP_JOB)
-        WAZUH_SETUP_JOB.update({
-            "running": True,
-            "status": "queued",
-            "message": "Wazuh Manager setup queued.",
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-            "finished_at": None,
-            "host": host,
-            "log": [],
-            "returncode": None,
-        })
-
-    setup_payload = {
-        "host": host,
-        "user": user,
-        "port": port,
-        "agent_manager_address": agent_manager_address,
-    }
-    Thread(
-        target=wazuh_manager_setup_worker,
-        args=(setup_payload, current_user["username"]),
-        daemon=True,
-    ).start()
-    broadcast_log("wazuh", f"Wazuh Manager CLI setup started for {host}.", current_user["username"])
-    return get_wazuh_setup_job_snapshot()
-
-
-@app.post("/api/wazuh/setup-wsl-manager")
-def setup_wazuh_wsl_manager(payload: dict | None = None, current_user: dict = Depends(require_auth)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
-    if os.name != "nt":
-        raise HTTPException(status_code=400, detail="This setup helper is written for the Windows project host.")
-    if not WAZUH_WSL_SETUP_SCRIPT.exists():
-        raise HTTPException(status_code=500, detail=f"Missing WSL setup script: {WAZUH_WSL_SETUP_SCRIPT}")
-    if not WAZUH_WSL_ALERTS_BRIDGE_SCRIPT.exists():
-        raise HTTPException(status_code=500, detail=f"Missing WSL bridge script: {WAZUH_WSL_ALERTS_BRIDGE_SCRIPT}")
-
-    payload = payload or {}
-    distro = validate_wsl_distro(payload.get("distro", "Ubuntu"))
-
-    with WAZUH_SETUP_LOCK:
-        if WAZUH_SETUP_JOB["running"]:
-            return dict(WAZUH_SETUP_JOB)
-        WAZUH_SETUP_JOB.update({
-            "running": True,
-            "status": "wsl_setup_window_launched",
-            "message": "WSL Wazuh Manager setup window was launched. Approve UAC and follow the PowerShell/Ubuntu prompts.",
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-            "finished_at": None,
-            "host": f"wsl:{distro}",
-            "log": [],
-            "returncode": None,
-        })
-
-    command = [
-        "powershell.exe",
-        "-NoExit",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(WAZUH_WSL_SETUP_SCRIPT),
-        "-Distro",
-        distro,
-        "-InstallDistro",
-        "-InstallCapstoneRules",
-        "-StartBridge",
-    ]
-    process = launch_visible_setup_window(command)
-    append_wazuh_setup_log(f"Visible WSL setup window started with pid={process.pid}.")
-    update_wazuh_setup_job(
-        running=False,
-        status="wsl_setup_window_launched",
-        message="WSL setup is running in a visible PowerShell window. After it finishes, press Wazuh start again if monitoring is not already running.",
-        returncode=None,
-    )
-    broadcast_log("wazuh", f"WSL Wazuh Manager setup window launched for {distro}.", current_user["username"])
-    return get_wazuh_setup_job_snapshot()
 
 
 @app.post("/api/wazuh/stop")
