@@ -69,14 +69,16 @@ function setAuthFeedback(msg, type = 'info') {
 function switchAuthMode(mode) {
     authMode = mode;
     $('tab-login').classList.toggle('active', mode === 'login');
-    $('tab-register').classList.toggle('active', mode === 'register');
-    $('auth-submit').textContent = mode === 'login' ? '濡쒓렇?? : '?뚯썝媛??;
-    setAuthFeedback(mode === 'login' ? '湲곕낯 愿由ъ옄 怨꾩젙: admin / admin1234' : '??怨꾩젙???앹꽦?⑸땲??');
+    if ($('tab-register')) $('tab-register').classList.toggle('active', mode === 'register');
+    $('auth-submit').textContent = mode === 'login' ? '로그인' : '회원가입';
+    setAuthFeedback(mode === 'login' ? '기본 관리자 계정: admin / admin1234' : '새 계정을 생성합니다.');
 }
+
 async function submitAuth() {
     const username = $('auth-username').value.trim();
     const password = $('auth-password').value;
-    if (!username || !password) return setAuthFeedback('?꾩씠?붿? 鍮꾨?踰덊샇瑜?紐⑤몢 ?낅젰?댁＜?몄슂.', 'error');
+    if (!username || !password) return setAuthFeedback('아이디와 비밀번호를 모두 입력하세요.', 'error');
+
     const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
     try {
         const res = await fetch(API_URL + endpoint, {
@@ -85,40 +87,41 @@ async function submitAuth() {
             body: JSON.stringify({ username, password })
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) return setAuthFeedback(data.detail || '?몄쬆???ㅽ뙣?덉뒿?덈떎.', 'error');
+        if (!res.ok) return setAuthFeedback(data.detail || data.message || '인증에 실패했습니다.', 'error');
+
         if (authMode === 'register') {
-            setAuthFeedback('?뚯썝媛?낆씠 ?꾨즺?섏뿀?듬땲?? 濡쒓렇?명빐二쇱꽭??', 'success');
+            setAuthFeedback('회원가입이 완료되었습니다. 로그인해주세요.', 'success');
             switchAuthMode('login');
             return;
         }
-        // 諛깆뿏???묐떟 ?뺤떇???곕씪 ?좏겙 異붿텧 (token / access_token / session_token)
+
         authToken = data.token || data.access_token || data.session_token || '';
         const userInfo = data.user || {};
         currentUsername = userInfo.username || data.username || username;
         currentUserIsAdmin = !!(userInfo.is_admin ?? data.is_admin);
         if (!authToken) {
-            setAuthFeedback('?쒕쾭 ?묐떟???좏겙???놁뒿?덈떎.', 'error');
+            setAuthFeedback('서버 응답에 토큰이 없습니다.', 'error');
             return;
         }
+
         localStorage.setItem('edrSessionToken', authToken);
         localStorage.setItem('edrUsername', currentUsername);
         localStorage.setItem('edrIsAdmin', currentUserIsAdmin ? 'true' : 'false');
         enterApp();
-    } catch (err) {
-        setAuthFeedback('諛깆뿏???쒕쾭???곌껐?????놁뒿?덈떎. 諛깆뿏?쒓? ?ㅽ뻾 以묒씤吏 ?뺤씤?섏꽭??', 'error');
+    } catch (_) {
+        setAuthFeedback('백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.', 'error');
     }
 }
+
 function enterApp() {
     $('auth-shell').classList.add('app-hidden');
     $('app-shell').classList.remove('app-hidden');
-    $('user-chip').textContent = (currentUsername || 'USER').toUpperCase();
-    $('user-role').textContent = currentUserIsAdmin ? '愿由ъ옄' : '?ъ슜??;
-    $('set-username').textContent = currentUsername;
-    $('set-role').textContent = currentUserIsAdmin ? '愿由ъ옄 (admin)' : '?쇰컲 ?ъ슜??;
-    $('set-token').textContent = authToken ? authToken.slice(0, 12) + '...' : '??;
-    if (currentUserIsAdmin) $('settings-admin-card').classList.remove('hidden');
-
-    // ?먮룞 ????뺤콉 ?좉? 蹂듭썝
+    if ($('user-chip')) $('user-chip').textContent = (currentUsername || 'USER').toUpperCase().slice(0, 1);
+    $('user-role').textContent = currentUserIsAdmin ? '관리자' : '사용자';
+    if ($('set-username')) $('set-username').textContent = currentUsername;
+    $('set-role').textContent = currentUserIsAdmin ? '관리자 (admin)' : '일반 사용자';
+    $('set-token').textContent = authToken ? authToken.slice(0, 12) + '...' : '-';
+    if (currentUserIsAdmin && $('settings-admin-card')) $('settings-admin-card').classList.remove('hidden');
     if ($('auto-quarantine')) $('auto-quarantine').checked = autoPolicy.quarantine;
     if ($('auto-block-ip')) $('auto-block-ip').checked = autoPolicy.blockIp;
     if ($('auto-terminate')) $('auto-terminate').checked = autoPolicy.terminate;
@@ -130,16 +133,15 @@ function enterApp() {
     loadIncidents();
     renderDashboard();
 
-    // 二쇨린???곹깭 ?대쭅 (8珥?
     if (statusRefreshTimer) clearInterval(statusRefreshTimer);
     statusRefreshTimer = setInterval(() => {
         if (!authToken) return;
         resetDailyIncidentStateIfNeeded();
         fetchStatus();
-        // ?꾪삊 ?먯? 酉곗뿉 ?덉쑝硫??몄떆?섑듃??媛깆떊
         if (currentView === 'threats') loadIncidents();
     }, 8000);
 }
+
 async function logout() {
     if (authToken) {
         try { await fetchAuthed('/api/auth/logout', { method: 'POST' }); } catch (_) {}
@@ -179,9 +181,9 @@ async function readApiResponse(res) {
 
 /* ============================================================
  * WebSocket
- * ============================================================ */
+    $('ws-status-text').textContent = connected ? '실시간 연결됨' : '연결 끊김';
 function setWsStatus(connected) {
-    $('ws-status-text').textContent = connected ? '?ㅼ떆媛??곌껐?? : '?곌껐 ????;
+    $('ws-status-text').textContent = connected ? '??? ???' : '?? ??';
     $('ws-status').parentElement.classList.toggle('on', connected);
     $('ws-status').classList.toggle('offline', !connected);
 }
@@ -267,7 +269,7 @@ function handleLogEvent(data) {
         isYaraScanRunning = false;
         const scanStatus = $('scan-status');
         if (scanStatus) {
-            scanStatus.textContent = '以묒???;
+            scanStatus.textContent = '중지됨';
             scanStatus.classList.remove('running', 'completed');
         }
         updateDeepScanStatus();
@@ -299,7 +301,7 @@ function inferSeverity(data) {
     return 'low';
 }
 function extractTitle(data) {
-    let msg = data.message || '?대깽??;
+    let msg = data.message || '이벤트';
     msg = msg.replace(/^\[[^\]]+\]\s*/, '');
     return msg.length > 90 ? msg.slice(0, 90) + '...' : msg;
 }
@@ -339,7 +341,7 @@ function shortPath(path) {
 }
 function formatBytes(bytes) {
     const value = Number(bytes);
-    if (!Number.isFinite(value)) return '??;
+    if (!Number.isFinite(value)) return '-';
     const units = ['B', 'KB', 'MB', 'GB'];
     let size = value;
     let unit = 0;
@@ -363,19 +365,19 @@ function bindPolicyToggles() {
     if (aq) aq.addEventListener('change', e => {
         autoPolicy.quarantine = e.target.checked;
         localStorage.setItem('edrPolicyAutoQuarantine', autoPolicy.quarantine);
-        toast(autoPolicy.quarantine ? '?먮룞 寃⑸━媛 ?쒖꽦?붾릺?덉뒿?덈떎' : '?먮룞 寃⑸━媛 鍮꾪솢?깊솕?섏뿀?듬땲??,
+        toast(autoPolicy.quarantine ? '자동 격리가 활성화되었습니다.' : '자동 격리가 비활성화되었습니다.',
               autoPolicy.quarantine ? 'success' : 'info');
     });
     if (ab) ab.addEventListener('change', e => {
         autoPolicy.blockIp = e.target.checked;
         localStorage.setItem('edrPolicyAutoBlockIp', autoPolicy.blockIp);
-        toast(autoPolicy.blockIp ? '?먮룞 IP 李⑤떒???쒖꽦?붾릺?덉뒿?덈떎' : '?먮룞 IP 李⑤떒??鍮꾪솢?깊솕?섏뿀?듬땲??,
+        toast(autoPolicy.blockIp ? '자동 IP 차단이 활성화되었습니다.' : '자동 IP 차단이 비활성화되었습니다.',
               autoPolicy.blockIp ? 'success' : 'info');
     });
     if (at) at.addEventListener('change', e => {
         autoPolicy.terminate = e.target.checked;
         localStorage.setItem('edrPolicyAutoTerminate', autoPolicy.terminate);
-        toast(autoPolicy.terminate ? '?먮룞 ?꾨줈?몄뒪 醫낅즺媛 ?쒖꽦?붾릺?덉뒿?덈떎' : '?먮룞 ?꾨줈?몄뒪 醫낅즺媛 鍮꾪솢?깊솕?섏뿀?듬땲??,
+        toast(autoPolicy.terminate ? '자동 프로세스 종료가 활성화되었습니다.' : '자동 프로세스 종료가 비활성화되었습니다.',
               autoPolicy.terminate ? 'success' : 'info');
     });
 }
@@ -434,7 +436,7 @@ async function triggerAutoAction(action) {
             time: nowHMS(),
             action: policyLabel,
             target: target.file_path || target.destination_ip || target.process_image || target.id.slice(0, 8),
-            result: result.result_message || '?ㅽ뻾??,
+            result: result.result_message || '실행됨',
             ok: ok
         });
         if (stats.autoActions.length > 30) stats.autoActions.pop();
@@ -461,7 +463,7 @@ function renderAutoPolicyLog() {
         const div = document.createElement('div');
         div.className = 'auto-policy-entry';
         const icCls = a.ok ? 'ok' : 'err';
-        const icCh = a.ok ? '?? : '??;
+        const icCh = a.ok ? '?' : '!';
         div.innerHTML = `
             <span class="pe-ic ${icCls}">${icCh}</span>
             <div class="pe-body">
@@ -481,7 +483,7 @@ async function fetchStatus() {
         const res = await fetchAuthed('/api/status');
         if (!res.ok) {
             if (res.status === 401) {
-                toast('?몄뀡??留뚮즺?섏뿀?듬땲??, 'warn');
+                toast('세션이 만료되었습니다.', 'warn');
                 logout();
             }
             return;
@@ -503,9 +505,9 @@ function updateAgentStatus() {
     const count = (isWazuhRunning ? 1 : 0) + (isYaraRunning ? 1 : 0);
     const st = $('agent-status');
     if (count === 2) { st.textContent = '?뺤긽'; st.className = 'sb-status-value good'; }
-    else if (count === 1) { st.textContent = '遺遺?媛??; st.className = 'sb-status-value warn'; }
-    else { st.textContent = '以묒???; st.className = 'sb-status-value bad'; }
-    $('agent-status-sub').textContent = `?붿쭊 ${count}/2 ?ㅽ뻾 以?;
+    else if (count === 1) { st.textContent = '부분 가동'; st.className = 'sb-status-value warn'; }
+    else { st.textContent = '중지됨'; st.className = 'sb-status-value bad'; }
+    $('agent-status-sub').textContent = `엔진 ${count}/2 실행 중`;
     $('sb-realtime-dot').classList.toggle('on', count > 0);
 }
 
@@ -518,13 +520,13 @@ function switchView(name) {
     $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
 
     const titles = {
-        dashboard: ['EDR ?듯빀 蹂댁븞 ??쒕낫??, '?쒖뒪???꾩껜 蹂댁븞 ?곹깭瑜?二쇱슂 KPI濡??붿빟?⑸땲??'],
-        timeline:  ['?대깽????꾨씪??, '?쒓컙?쒖쑝濡?紐⑤뱺 蹂댁븞 ?대깽?몃? ?뺤씤?⑸땲??'],
-        realtime:  ['?ㅼ떆媛??먯?', '?됱쐞 ?먯? / YARA ?붿쭊??吏곸젒 ?쒖뼱?섍퀬 ?쇱씠釉??ㅽ듃由쇱쓣 ?뺤씤?⑸땲??'],
-        analysis:  ['遺꾩꽍 寃곌낵', 'YARA ?ъ링 ?ㅼ틪?쇰줈 ?섏떖 ?뚯씪???뺣? 寃?ы빀?덈떎.'],
-        threats:   ['?꾪삊 ?먯?', '?몄떆?섑듃瑜?寃?좏븯怨?寃⑸━쨌李⑤떒 ?????議곗튂瑜??섑뻾?⑸땲??'],
-        reports:   ['蹂닿퀬??, '?좎쭨쨌?붿쭊蹂꾨줈 蹂닿???濡쒓렇瑜?議고쉶?섍퀬 愿由ы빀?덈떎.'],
-        settings:  ['?ㅼ젙', '怨꾩젙 ?뺣낫, ?뚮┝, ?먮룞 ????뺤콉???ㅼ젙?⑸땲??']
+        dashboard: ['통합 보안 대시보드', '시스템 보안 상태를 주요 KPI로 요약합니다.'],
+        timeline:  ['이벤트 타임라인', '시간순으로 모든 보안 이벤트를 확인합니다.'],
+        realtime:  ['실시간 탐지', '행위 탐지와 YARA 엔진을 제어하고 라이브 스트림을 확인합니다.'],
+        analysis:  ['분석 결과', 'YARA 규칙 스캔으로 수집 파일을 검사합니다.'],
+        threats:   ['위협 탐지', '탐지된 인시던트에서 격리, 차단, 종료 조치를 수행합니다.'],
+        reports:   ['보고서', '날짜와 엔진별 로그를 조회하고 관리합니다.'],
+        settings:  ['설정', '계정 정보, 알림, 자동 대응 정책을 설정합니다.']
     };
     const [t, s] = titles[name] || titles.dashboard;
     $('topbar-title').textContent = t;
@@ -592,8 +594,8 @@ function renderRecent() {
     if (!recent) return;
     const map = {
         high:   { cls: 'red',    ic: '!' },
-        medium: { cls: 'orange', ic: '?? },
-        low:    { cls: 'blue',   ic: '?? }
+        medium: { cls: 'orange', ic: '!' },
+        low:    { cls: 'blue',   ic: 'i' }
     };
     recent.innerHTML = '';
     if (!stats.events.length) {
@@ -643,18 +645,18 @@ function updateFeaturedDetection(ev) {
     if (!ev) return;
     $('featured-time').textContent = `${ev.date} ${ev.time}`;
     $('featured-host').textContent = ev.host || 'localhost';
-    $('featured-user').textContent = ev.username || currentUsername || '??;
+    $('featured-user').textContent = ev.username || currentUsername || '-';
     $('featured-source').textContent = ev.source.toUpperCase();
-    $('featured-message').textContent = ev.message || '??;
+    $('featured-message').textContent = ev.message || '-';
     const badge = $('featured-badge');
     if (ev.sev === 'high') { badge.textContent = '湲닿툒 ?꾪삊 ?먯?'; badge.className = 'sev-badge crit'; }
-    else if (ev.sev === 'medium') { badge.textContent = '二쇱쓽 ?대깽??; badge.className = 'sev-badge high'; }
-    else { badge.textContent = '?쇰컲 ?대깽??; badge.className = 'sev-badge low'; }
+    else if (ev.sev === 'medium') { badge.textContent = '주의 이벤트'; badge.className = 'sev-badge high'; }
+    else { badge.textContent = '일반 이벤트'; badge.className = 'sev-badge low'; }
 }
 function refreshDashboardEngineState() {
-    $('mini-wazuh-state').textContent = isWazuhRunning ? '?ㅽ뻾 以? : '以묒???;
+    $('mini-wazuh-state').textContent = isWazuhRunning ? '실행 중' : '중지됨';
     $('mini-wazuh-state').className = 'state-tag ' + (isWazuhRunning ? 'on' : 'off');
-    $('mini-yara-state').textContent = isYaraRunning ? '?ㅽ뻾 以? : '以묒???;
+    $('mini-yara-state').textContent = isYaraRunning ? '실행 중' : '중지됨';
     $('mini-yara-state').className = 'state-tag ' + (isYaraRunning ? 'on' : 'off');
 }
 function refreshEngineBars() {
@@ -671,9 +673,9 @@ function refreshDashboardSummary() {
     const active = stats.incidents.filter(isActiveThreatIncident).length;
     const resolved = stats.incidents.filter(isContainedIncident).length;
     const pending = stats.incidents.filter(inc => isIncidentOpen(inc) && !isActiveThreatIncident(inc)).length;
-    $('featured-active').textContent = active + '嫄?;
-    $('featured-resolved').textContent = resolved + '嫄?;
-    $('featured-pending').textContent = pending + '嫄?;
+    $('featured-active').textContent = active + '건';
+    $('featured-resolved').textContent = resolved + '건';
+    $('featured-pending').textContent = pending + '건';
 }
 
 /* ============================================================
@@ -704,7 +706,7 @@ function renderTimelineView() {
         list.innerHTML = '<li class="empty-state">議곌굔??留욌뒗 ?대깽?멸? ?놁뒿?덈떎.</li>';
         return;
     }
-    const icMap = { high: '!', medium: '??, low: '?? };
+    const icMap = { high: '!', medium: '!', low: 'i' };
     filtered.slice(0, 200).forEach(ev => {
         const li = document.createElement('li');
         li.className = 'event-stream-item';
@@ -719,7 +721,7 @@ function renderTimelineView() {
                     ${ev.username ? `<span>?ъ슜??${esc(ev.username)}</span>` : ''}
                 </div>
             </div>
-            <div class="event-stream-arrow">??/div>`;
+            <div class="event-stream-arrow">?</div>`;
         li.addEventListener('click', () => openEventDetail(ev));
         list.appendChild(li);
     });
@@ -731,53 +733,53 @@ function renderTimelineView() {
 function refreshRealtimeStats() {
     const wPill = $('wazuh-status-pill');
     if (!wPill) return;
-    wPill.textContent = isWazuhRunning ? '?ㅽ뻾 以? : '以묒???;
+    wPill.textContent = isWazuhRunning ? '실행 중' : '중지됨';
     wPill.classList.toggle('running', isWazuhRunning);
-    $('wazuh-state').textContent = isWazuhRunning ? '?ㅽ뻾 以? : '以묒???;
-    $('wazuh-counter').textContent = `${wazuhCount}嫄?;
-    $('wazuh-last').textContent = lastWazuhTs || (wazuhLogPath ? `媛먯떆: ${shortPath(wazuhLogPath)}` : '??);
+    $('wazuh-state').textContent = isWazuhRunning ? '실행 중' : '중지됨';
+    $('wazuh-counter').textContent = `${wazuhCount}건`;
+    $('wazuh-last').textContent = lastWazuhTs || (wazuhLogPath ? `감시: ${shortPath(wazuhLogPath)}` : '-');
     const wBtn = $('btn-wazuh-toggle');
     wBtn.classList.toggle('danger', isWazuhRunning);
     wBtn.innerHTML = isWazuhRunning
-        ? `<span class="btn-icon">??/span><span>?됱쐞 ?먯? 以묒?</span>`
-        : `<span class="btn-icon">??/span><span>?됱쐞 ?먯? ?쒖옉</span>`;
+        ? `<span class="btn-icon">■</span><span>행위 탐지 중지</span>`
+        : `<span class="btn-icon">▶</span><span>행위 탐지 시작</span>`;
     $('wazuh-card').classList.toggle('active-engine', isWazuhRunning);
-    $('wazuh-stream-count').textContent = `${wazuhCount}嫄?;
+    $('wazuh-stream-count').textContent = `${wazuhCount}건`;
 
     const yPill = $('yara-status-pill');
-    yPill.textContent = isYaraRunning ? '?ㅽ뻾 以? : '以묒???;
+    yPill.textContent = isYaraRunning ? '실행 중' : '중지됨';
     yPill.classList.toggle('running', isYaraRunning);
-    $('yara-state').textContent = isYaraRunning ? '?ㅽ뻾 以? : '以묒???;
-    $('yara-counter').textContent = `${yaraCount}嫄?;
-    $('yara-last').textContent = lastYaraTs || (yaraTargetPaths.length ? `媛먯떆: ${yaraTargetPaths.length}媛?寃쎈줈` : '??);
+    $('yara-state').textContent = isYaraRunning ? '실행 중' : '중지됨';
+    $('yara-counter').textContent = `${yaraCount}건`;
+    $('yara-last').textContent = lastYaraTs || (yaraTargetPaths.length ? `감시: ${yaraTargetPaths.length}개 경로` : '-');
     const yBtn = $('btn-yara-toggle');
     yBtn.classList.toggle('danger', isYaraRunning);
     yBtn.innerHTML = isYaraRunning
-        ? `<span class="btn-icon">??/span><span>YARA 以묒?</span>`
-        : `<span class="btn-icon">??/span><span>YARA ?쒖옉</span>`;
+        ? `<span class="btn-icon">■</span><span>YARA 중지</span>`
+        : `<span class="btn-icon">▶</span><span>YARA 시작</span>`;
     $('yara-card').classList.toggle('active-engine', isYaraRunning);
-    $('yara-stream-count').textContent = `${yaraCount}嫄?;
+    $('yara-stream-count').textContent = `${yaraCount}건`;
 
     const banner = $('realtime-banner');
     if (isWazuhRunning && isYaraRunning) {
         banner.classList.add('all-on');
         banner.classList.remove('partial');
-        banner.querySelector('.rb-title').textContent = '???ㅼ떆媛??먯? 媛??以?;
-        banner.querySelector('.rb-sub').textContent = `?됱쐞 ?먯? ${shortPath(wazuhLogPath) || 'Sysmon'} 쨌 YARA ${yaraTargetPaths.length || 0}媛?寃쎈줈 媛먯떆 以?;
+        banner.querySelector('.rb-title').textContent = '전체 실시간 탐지 가동 중';
+        banner.querySelector('.rb-sub').textContent = `행위 탐지 ${shortPath(wazuhLogPath) || 'Sysmon'} · YARA ${yaraTargetPaths.length || 0}개 경로 감시 중`;
         banner.querySelector('button').textContent = '?꾩껜 ?붿쭊 以묒?';
         banner.querySelector('button').onclick = stopAllEngines;
     } else if (isWazuhRunning || isYaraRunning) {
         banner.classList.add('partial');
         banner.classList.remove('all-on');
-        banner.querySelector('.rb-title').textContent = '???쇰? ?붿쭊留??ㅽ뻾 以?;
+        banner.querySelector('.rb-title').textContent = '일부 엔진만 실행 중';
         banner.querySelector('.rb-sub').textContent = isWazuhRunning
             ? `?됱쐞 ?먯? 媛먯떆 以? ${shortPath(wazuhLogPath) || 'Sysmon/?꾨줈?몄뒪'}`
-            : `YARA ${yaraTargetPaths.length || 0}媛?寃쎈줈 媛먯떆 以?;
+            : `YARA ${yaraTargetPaths.length || 0}개 경로 감시 중`;
         banner.querySelector('button').textContent = '?섎㉧吏 ?붿쭊 ?쒖옉';
         banner.querySelector('button').onclick = startAllEngines;
     } else {
         banner.classList.remove('all-on', 'partial');
-        banner.querySelector('.rb-title').textContent = '?ㅼ떆媛??먯?瑜??쒖옉?섎젮硫??꾨옒 ?붿쭊??耳쒖꽭??;
+        banner.querySelector('.rb-title').textContent = '실시간 탐지를 시작하려면 아래 엔진을 켜세요';
         banner.querySelector('.rb-sub').textContent = '?됱쐞 ?먯?? YARA ?뚯씪 留ㅼ묶???ㅼ떆媛?媛먯떆?⑸땲??';
         banner.querySelector('button').textContent = '?꾩껜 ?붿쭊 ?쒖옉';
         banner.querySelector('button').onclick = startAllEngines;
@@ -832,8 +834,8 @@ async function toggleWazuh() {
             return;
         }
         await fetchStatus();
-        const action = isWazuhRunning ? '?쒖옉' : '以묒?';
-        toast(`?됱쐞 ?먯?媛 ${action}?섏뿀?듬땲??, isWazuhRunning ? 'success' : 'info');
+        const action = isWazuhRunning ? '시작' : '중지';
+        toast(`행위 탐지가 ${action}되었습니다.`, isWazuhRunning ? 'success' : 'info');
     } catch (e) { toast('諛깆뿏???곌껐 ?ㅽ뙣', 'error'); }
     finally { btn.disabled = false; }
 }
@@ -854,8 +856,8 @@ async function toggleYara() {
             return;
         }
         await fetchStatus();
-        const action = isYaraRunning ? '?쒖옉' : '以묒?';
-        toast(`YARA 紐⑤땲?곌? ${action}?섏뿀?듬땲??, isYaraRunning ? 'success' : 'info');
+        const action = isYaraRunning ? '시작' : '중지';
+        toast(`YARA 모니터가 ${action}되었습니다.`, isYaraRunning ? 'success' : 'info');
     } catch (e) { toast('諛깆뿏???곌껐 ?ㅽ뙣', 'error'); }
     finally { btn.disabled = false; }
 }
@@ -1072,7 +1074,7 @@ async function stopDeepScan() {
         }
         isYaraScanRunning = false;
         if (status) {
-            status.textContent = data.status === 'stopped' ? '以묒??? : '?ㅽ뻾 以묒씤 ?ㅼ틪 ?놁쓬';
+            status.textContent = data.status === 'stopped' ? '중지됨' : '실행 중인 스캔 없음';
             status.classList.remove('running', 'completed');
         }
         updateDeepScanStatus();
@@ -1103,8 +1105,8 @@ function appendScanResult(ev) {
     }).join('');
     const filePath = details ? (details.file_path || ev.message) : ev.message;
     const fileFacts = details
-        ? `?ш린 ${formatBytes(details.file_size)} 쨌 SHA256 ${details.sha256 ? esc(details.sha256) : '??}`
-        : `?몄뒪??${esc(ev.host)} 쨌 ?ъ슜??${esc(ev.username || '??)}`;
+        ? `크기 ${formatBytes(details.file_size)} · SHA256 ${details.sha256 ? esc(details.sha256) : '-'}`
+        : `호스트 ${esc(ev.host)} · 사용자 ${esc(ev.username || '-')}`;
     li.innerHTML = `
         <div class="match-ic">!</div>
         <div class="match-list-body">
@@ -1242,8 +1244,8 @@ function renderIncidents() {
     const sections = [
         ['active', '?쒖꽦 ?꾪삊', '利됱떆 ??묒씠 ?꾩슂??誘몄“移??몄떆?섑듃', grouped.active],
         ['contained', '寃⑸━/????꾨즺', '寃⑸━, 李⑤떒, ?꾨줈?몄뒪 醫낅즺媛 ?꾨즺???몄떆?섑듃', grouped.contained],
-        ['pending', '遺꾩꽍 ?湲?, '異붽? ?뺤씤 ??議곗튂??誘멸껐???몄떆?섑듃', grouped.pending],
-        ['kept', '?좎? 愿李?, '?댁쁺?먭? 愿李???곸쑝濡??④릿 ?몄떆?섑듃', grouped.kept]
+        ['pending', '분석 대기', '추가 확인 또는 조치가 필요한 인시던트', grouped.pending],
+        ['kept', '유지 관찰', '운영자가 유지 관찰로 남긴 인시던트', grouped.kept]
     ];
     if (grouped.other.length) {
         sections.push(['other', '湲고? ?몄떆?섑듃', '遺꾨쪟 議곌굔 諛뽰쓽 ?곹깭瑜?媛吏??몄떆?섑듃', grouped.other]);
@@ -1277,13 +1279,13 @@ function renderIncidentCard(inc) {
     const sevClass = ['critical', 'high'].includes(riskLabel) ? 'high' : riskLabel === 'medium' ? 'medium' : 'low';
     const sevText = riskLabel === 'critical' ? '湲닿툒' : riskLabel === 'high' ? '?믪쓬' : riskLabel === 'medium' ? '以묎컙' : '??쓬';
     const statusMap = {
-        pending: ['????湲?, 'detected'],
+        pending: ['대응 대기', 'detected'],
         quarantined: ['寃⑸━ ?꾨즺', 'quarantined'],
         terminated: ['?꾨줈?몄뒪 醫낅즺', 'terminated'],
         blocked: ['IP 李⑤떒', 'terminated'],
-        kept: ['愿李?以?, 'kept']
+        kept: ['관찰 중', 'kept']
     };
-    const [statusLabel, statusCls] = statusMap[inc.status] || ['泥섎━ 以?, 'detected'];
+    const [statusLabel, statusCls] = statusMap[inc.status] || ['처리 중', 'detected'];
     const decided = inc.decision && inc.decision !== null;
     const title = inc.rule_description || inc.wazuh_message || '?섏떖 ?꾪삊';
     const yaraRules = (inc.yara_matches || []).map(m => typeof m === 'string' ? m : (m.rule || '')).filter(Boolean).join(', ');
@@ -1303,10 +1305,10 @@ function renderIncidentCard(inc) {
             </div>
             <div class="incident-title">${esc(title)}</div>
             <div class="incident-meta">
-                <div><div class="inc-k">?뚯씪 寃쎈줈</div><div class="inc-v mono">${esc(inc.file_path || '??)}</div></div>
-                <div><div class="inc-k">?먯? ?덈꺼</div><div class="inc-v">${esc(inc.wazuh_level || '??)}</div></div>
-                <div><div class="inc-k">留ㅼ묶 猷?(YARA)</div><div class="inc-v mono">${esc(yaraRules || '??)}</div></div>
-                <div><div class="inc-k">?꾨줈?몄뒪</div><div class="inc-v mono">${esc(inc.process_image || '??)} ${inc.process_id ? '<span style="color:var(--text-3)">(PID '+esc(inc.process_id)+')</span>' : ''}</div></div>
+                <div><div class="inc-k">?? ??</div><div class="inc-v mono">${esc(inc.file_path || '-')}</div></div>
+                <div><div class="inc-k">?? ??</div><div class="inc-v">${esc(inc.wazuh_level || '-')}</div></div>
+                <div><div class="inc-k">?? ?(YARA)</div><div class="inc-v mono">${esc(yaraRules || '-')}</div></div>
+                <div><div class="inc-k">????</div><div class="inc-v mono">${esc(inc.process_image || '-')} ${inc.process_id ? '<span style="color:var(--text-3)">(PID '+esc(inc.process_id)+')</span>' : ''}</div></div>
                 ${inc.destination_ip ? `<div><div class="inc-k">紐⑹쟻吏 IP</div><div class="inc-v mono">${esc(inc.destination_ip)}${inc.destination_port ? ':'+esc(inc.destination_port) : ''}</div></div>` : ''}
                 ${inc.command_line ? `<div><div class="inc-k">而ㅻ㎤?쒕씪??/div><div class="inc-v mono">${esc((inc.command_line || '').slice(0, 80))}</div></div>` : ''}
             </div>
@@ -1315,7 +1317,7 @@ function renderIncidentCard(inc) {
                 <button class="inc-btn danger ${suggested === 'quarantine' ? 'recommended' : ''}" onclick="decideIncident('${esc(inc.id)}', 'quarantine')" ${decided || !inc.file_exists ? 'disabled title="寃⑸━???뚯씪??李얠쓣 ???놁뒿?덈떎"' : ''}>?뚯씪 寃⑸━</button>
                 <button class="inc-btn warn ${suggested === 'terminate_process' ? 'recommended' : ''}" onclick="decideIncident('${esc(inc.id)}', 'terminate_process')" ${decided || !inc.process_id ? 'disabled' : ''}>?꾨줈?몄뒪 醫낅즺</button>
                 <button class="inc-btn warn ${suggested === 'block_ip' ? 'recommended' : ''}" onclick="decideIncident('${esc(inc.id)}', 'block_ip')" ${decided || !inc.destination_ip ? 'disabled' : ''}>IP 李⑤떒</button>
-                <button class="inc-btn" onclick="decideIncident('${esc(inc.id)}', 'keep')" ${decided ? 'disabled' : ''}>?좎? 愿李?/button>
+                <button class="inc-btn" onclick="decideIncident('${esc(inc.id)}', 'keep')" ${decided ? 'disabled' : ''}>유지 관찰</button>
             </div>
             ${inc.decision_note ? `<div class="incident-note">?뱷 ${esc(inc.decision_note)}</div>` : ''}
         </div>`;
@@ -1513,7 +1515,7 @@ async function loadUserList() {
             const isAdmin = name === 'admin' || (typeof u === 'object' && u.is_admin);
             const li = document.createElement('li');
             li.innerHTML = `<span class="name">${esc(name)}</span>
-                <span class="role ${isAdmin ? 'admin' : ''}">${isAdmin ? '愿由ъ옄' : '?ъ슜??}</span>`;
+                <span class="role ${isAdmin ? 'admin' : ''}">${isAdmin ? '관리자' : '사용자'}</span>`;
             list.appendChild(li);
         });
     } catch (_) {}
@@ -1590,7 +1592,7 @@ function renderNotifList() {
     items.slice(0, 30).forEach(n => {
         const li = document.createElement('li');
         li.className = `notif-item ${n.sev}${n.read ? ' read' : ''}`;
-        const icon = n.sev === 'high' ? '!' : n.sev === 'medium' ? '?? : '??;
+        const icon = n.sev === 'high' ? '!' : n.sev === 'medium' ? '!' : 'i';
         li.innerHTML = `
             <div class="notif-icon ${n.sev}">${icon}</div>
             <div class="notif-body">
@@ -1646,7 +1648,7 @@ function openEventDetail(ev) {
                 <div class="kv"><span>?붿쭊</span><span>${esc(ev.source.toUpperCase())}</span></div>
                 <div class="kv"><span>?ш컖??/span><span>${ev.sev}</span></div>
                 <div class="kv"><span>?몄뒪??/span><span>${esc(ev.host)}</span></div>
-                <div class="kv"><span>?ъ슜??/span><span>${esc(ev.username || '??)}</span></div>
+                <div class="kv"><span>사용자</span><span>${esc(ev.username || '-')}</span></div>
             </div>
             <div>
                 <h5 class="mini-head">?먮낯 硫붿떆吏</h5>
@@ -1667,8 +1669,8 @@ function toast(msg, type = 'info') {
     const c = $('toast-container');
     const t = document.createElement('div');
     t.className = `toast ${type}`;
-    const icons = { success: '??, error: '??, warn: '!', info: '?? };
-    t.innerHTML = `<div class="toast-ic">${icons[type] || '??}</div><div>${esc(msg)}</div>`;
+    const icons = { success: '✓', error: '!', warn: '!', info: 'i' };
+    t.innerHTML = `<div class="toast-ic">${icons[type] || 'i'}</div><div>${esc(msg)}</div>`;
     c.appendChild(t);
     setTimeout(() => {
         t.style.opacity = '0';
